@@ -85,23 +85,49 @@ def export_torch_weights_to_unicode_python_file(model_class, checkpoint_path,
 # Exemple d�utilisation
 if __name__ == "__main__":
 	class PolicyNet(nn.Module):
-		def __init__(self, num_players=10, num_actions=5):
+		def __init__(self, num_players=5, num_actions=5):
 			super().__init__()
-			self.conv1 = nn.Conv2d(83, 8, 3, padding=1)
+			self.conv1 = nn.Conv2d(93, 8, 3, padding=1)
+			self.bn1 = nn.BatchNorm2d(8)
+
 			self.conv2 = nn.Conv2d(8, 16, 3, padding=1)
+			self.bn2 = nn.BatchNorm2d(16)
+
 			self.conv3 = nn.Conv2d(16, 16, 3, padding=1)
-			self.relu = nn.ReLU()
+			self.bn3 = nn.BatchNorm2d(16)
+
 			self.pool = nn.AdaptiveAvgPool2d(1)
-			self.fc = nn.Linear(16, num_players * num_actions)
+
+			self.fc1 = nn.Linear(16, 64)
+			self.bn_fc1 = nn.BatchNorm1d(64)
+
+			self.fc2 = nn.Linear(64, 128)
+			self.bn_fc2 = nn.BatchNorm1d(128)
+
+			self.fc3 = nn.Linear(128, num_players * num_actions)
+
+			self.dropout1 = nn.Dropout(p=0.3)
+			self.dropout2 = nn.Dropout(p=0.3)
+
+			self.relu = nn.ReLU()
+
 			self.num_players = num_players
 			self.num_actions = num_actions
 
 		def forward(self, x):
-			x = self.relu(self.conv1(x))
-			x = self.relu(self.conv2(x))
-			x = self.relu(self.conv3(x))
-			x = self.pool(x).view(x.size(0), -1)
-			return self.fc(x).view(-1, self.num_players, self.num_actions)
+			x = self.relu(self.bn1(self.conv1(x)))
+			x = self.relu(self.bn2(self.conv2(x)))
+			x = self.relu(self.bn3(self.conv3(x)))
+			x = self.pool(x).view(x.size(0), -1)  # shape: (B, 16)
+		
+			x = self.relu(self.bn_fc1(self.fc1(x)))
+			x = self.dropout1(x)
+			x = self.relu(self.bn_fc2(self.fc2(x)))
+			x = self.dropout2(x)
+
+			return self.fc3(x).view(-1, self.num_players, self.num_actions)
+
+
 
 	# Remplace 'checkpoint6uslim.pth' par le chemin de ton checkpoint
 	export_torch_weights_to_unicode_python_file(

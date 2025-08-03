@@ -9,6 +9,7 @@ import time
 from datetime import timedelta
 from conv2d import *
 from weights_unicode import *
+from mcts import *
 
 # Constants couleurs
 WHITE = (255, 255, 255)
@@ -479,6 +480,21 @@ class Player:
 	def __repr__(self):
 		return f"Player({self.coord}, '{self.team}')"
 
+	def clone(self):
+		new_player = Player(Coord(self.coord.x, self.coord.y), self.team)
+		new_player.last_coord = Coord(self.last_coord.x, self.last_coord.y)
+		new_player.mx_cooldown = self.mx_cooldown
+		new_player.cooldown = self.cooldown
+		new_player.splash_bombs = self.splash_bombs
+		new_player.wetness = self.wetness
+		new_player.optimalRange = self.optimalRange
+		new_player.soakingPower = self.soakingPower
+		new_player.score = self.score
+		new_player.dead = self.dead
+		new_player.thx = self.thx
+		new_player.thy = self.thy
+		return new_player
+
 
 class Game:
 	def __init__(self, grid, red, blue):
@@ -491,6 +507,26 @@ class Game:
 		self.reward2 = 0
 		self.action = []
 		self.graph = Graph(self.grid)
+
+	def Clone(self):
+
+		rd = []
+		for p in self.red:
+			pp = p.clone()
+			rd.append(pp)
+
+		bl = []
+		for p in self.blue:
+			pp = p.clone()
+			bl.append(pp)
+		game = Game(self.grid, rd, bl)
+		game.rscore = self.rscore
+		game.bscore = self.bscore
+		game.reward = self.reward
+		game.reward2 = self.reward2
+		game.graph = self.graph
+
+		return game
 
 	def get_Move(self, x, y):
 		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1)]
@@ -547,42 +583,57 @@ class Game:
 		self.nnz.load_state_dict(checkpoint['model_state_dict'])
 
 	def init_NNUSN(self):
-		self.nnz = PolicyNet_Numpy(num_players=10, num_actions=5)
+		self.nnz = PolicyNet_Numpy()
 		load_pytorch_weights_into_numpy_model('checkpoint6uslim.pth', self.nnz)
 
+	def set_bn_eval(bn_layer, weight, bias, running_mean, running_var, shape):
+		bn_layer.gamma = decode_unicode_string_to_weights(weight, shape=shape).reshape(1, shape[0], 1, 1)
+		bn_layer.beta = decode_unicode_string_to_weights(bias, shape=shape).reshape(1, shape[0], 1, 1)
+		bn_layer.running_mean = decode_unicode_string_to_weights(running_mean, shape=shape).reshape(1, shape[0], 1, 1)
+		bn_layer.running_var = decode_unicode_string_to_weights(running_var, shape=shape).reshape(1, shape[0], 1, 1)
+		
+	def load_batchnorm_eval_only(self, bn_layer, weight_str, bias_str, shape):
+		C = shape[0]
+		bn_layer.gamma = decode_unicode_string_to_weights(weight_str, shape=shape).reshape(1, C, 1, 1)
+		bn_layer.beta = decode_unicode_string_to_weights(bias_str, shape=shape).reshape(1, C, 1, 1)
+	
+		# Fake running stats for eval mode
+		bn_layer.running_mean = np.zeros((1, C, 1, 1))
+		bn_layer.running_var = np.ones((1, C, 1, 1))
+		
+
 	def init_NNUSNW(self):
-		self.nnz = PolicyNet_Numpy(num_players=10, num_actions=5)
+		self.nnz = PolicyNet_Numpy()
 
 		# Conv1
-		conv1_weight_ = decode_unicode_string_to_weights(conv1_weight, shape=conv1_weight_shape)
-		self.nnz.conv1.weight = conv1_weight_
-
-		conv1_bias_ = decode_unicode_string_to_weights(conv1_bias, shape=conv1_bias_shape)
-		self.nnz.conv1.bias = conv1_bias_
+		self.nnz.conv1.weight = decode_unicode_string_to_weights(conv1_weight, shape=conv1_weight_shape)
+		self.nnz.conv1.bias = decode_unicode_string_to_weights(conv1_bias, shape=conv1_bias_shape)
 
 		# Conv2
-		conv2_weight_ = decode_unicode_string_to_weights(conv2_weight, shape=conv2_weight_shape)
-		self.nnz.conv2.weight = conv2_weight_
-
-		conv2_bias_ = decode_unicode_string_to_weights(conv2_bias, shape=conv2_bias_shape)
-		self.nnz.conv2.bias = conv2_bias_
+		self.nnz.conv2.weight = decode_unicode_string_to_weights(conv2_weight, shape=conv2_weight_shape)
+		self.nnz.conv2.bias = decode_unicode_string_to_weights(conv2_bias, shape=conv2_bias_shape)
+		
 
 		# Conv3
-		conv3_weight_ = decode_unicode_string_to_weights(conv3_weight, shape=conv3_weight_shape)
-		self.nnz.conv3.weight = conv3_weight_
-
-		conv3_bias_ = decode_unicode_string_to_weights(conv3_bias, shape=conv3_bias_shape)
-		self.nnz.conv3.bias = conv3_bias_
+		self.nnz.conv3.weight = decode_unicode_string_to_weights(conv3_weight, shape=conv3_weight_shape)
+		self.nnz.conv3.bias = decode_unicode_string_to_weights(conv3_bias, shape=conv3_bias_shape)
 
 		# Fully connected
-		fc_weight_ = decode_unicode_string_to_weights(fc_weight, shape=fc_weight_shape)
-		self.nnz.fc.weight = fc_weight_
-
-		fc_bias_ = decode_unicode_string_to_weights(fc_bias, shape=fc_bias_shape)
-		self.nnz.fc.bias = fc_bias_
-
-
+		self.nnz.fc1.weight = decode_unicode_string_to_weights(fc1_weight, shape=fc1_weight_shape)
+		self.nnz.fc1.bias = decode_unicode_string_to_weights(fc1_bias, shape=fc1_bias_shape)
+	
+		self.nnz.fc2.weight = decode_unicode_string_to_weights(fc2_weight, shape=fc2_weight_shape)
+		self.nnz.fc2.bias = decode_unicode_string_to_weights(fc2_bias, shape=fc2_bias_shape)
 		
+		self.nnz.fc3.weight = decode_unicode_string_to_weights(fc3_weight, shape=fc3_weight_shape)
+		self.nnz.fc3.bias = decode_unicode_string_to_weights(fc3_bias, shape=fc3_bias_shape)
+		
+		self.load_batchnorm_eval_only(self.nnz.bn1, bn1_weight, bn1_bias, bn1_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn2, bn2_weight, bn2_bias, bn2_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn3, bn3_weight, bn3_bias, bn3_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn_fc1, bn_fc1_weight, bn_fc1_bias, bn_fc1_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn_fc2, bn_fc2_weight, bn_fc2_bias, bn_fc2_weight_shape)
+				
 
 	def get_best_zone_for_agent(self, agent: Player, my_agents: list[Player], opp_agents: list[Player], width: int, height: int):
 		best_zones = []
@@ -712,7 +763,7 @@ class Game:
 				p.back_move()
 
 		if(len(self.action) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(self.action) < 5:
 				self.action.append(4)
 
@@ -736,8 +787,8 @@ class Game:
 			if score < 0:
 				self.reward = -score
 						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
 
 		if abs(score) >= 600:
 			if score > 0:return 1
@@ -791,7 +842,7 @@ class Game:
 				self.action[idx] = 4  # action "retour arri�re"
 
 		if(len(self.action) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(self.action) < 5:
 				self.action.append(4)
 	
@@ -822,7 +873,7 @@ class Game:
 				action2[idx] = 4  # action "retour arri�re"
 
 		if(len(action2) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(action2) < 5:
 				action2.append(4)
 
@@ -880,8 +931,8 @@ class Game:
 		if score < 0:
 			self.reward2 = -score
 						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
 
 		if abs(score) >= 600:
 			if score > 0:return 1
@@ -951,19 +1002,15 @@ class Game:
 
 
 
-		for idx, p in enumerate(self.red):
-			#if p.wetness >= 100:
-			#	continue
-			occupied = set(pl.coord for pl in self.red + self.blue if pl != p)
-			if p.coord in occupied:
-				p.back_move()
-				self.action[idx] = 4  # action "retour arri�re"
+		
 
 		if(len(self.action) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(self.action) < 5:
 				self.action.append(4)
 	
+
+		occupied = set(p.coord for p in self.red + self.blue)
 
 		# Actions des bleus uniquement
 		best_pos, _ = find_best_spot_numpy_general(self, "blue")  # ou "blue" selon le camp
@@ -1008,22 +1055,178 @@ class Game:
 				action2.append(4)  # aucune case libre vers best_pos
 
 
+		for idx, p in enumerate(self.red):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				self.action[idx] = 4  # action "retour arri�re"
 	
 		for idx, p in enumerate(self.blue):
 			#if p.wetness >= 100:
 			#	continue
-			occupied = set(pl.coord for pl in self.red + self.blue if pl != p)
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
 			if p.coord in occupied:
 				p.back_move()
 				action2[idx] = 4  # action "retour arri�re"
 
 		if(len(action2) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(action2) < 5:
 				action2.append(4)
 
 		
-		self.action.extend(action2)
+		#self.action.extend(action2)
+		if ind == 2:self.action = action2
+
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		#self.remove_wet_players()
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		#self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		self.reward2 = 0
+		if score > 0:
+			self.reward = score
+
+		if score < 0:
+			self.reward2 = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:return 1
+			elif score < 0:return -1
+		
+		if len(self.red) == 0:return -1
+		if len(self.blue) == 0:return 1
+
+		return -2
+
+	def PlayX10TerrMCTS(self, ind=1):
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1), Coord(0,0)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+		self.action = []
+
+		action2 = []
+			
+
+		mcts = MCTS()
+
+		hits = mcts.PlayS('red', self.Clone())
+		#print(hits)
+		for idx, p in enumerate(self.red):
+			if hits[idx] is None:
+				self.action.append(4)
+				continue
+			mv = Coord(hits[idx].x, hits[idx].y)
+			if mv not in occupied:
+				delta = Coord(mv.x - p.coord.x, mv.y - p.coord.y)
+								
+				dir_index = directions.index(delta)
+				self.action.append(dir_index)
+
+				p.move(mv)
+				
+			else:
+				self.action.append(4)
+
+		mcts = MCTS()
+
+		occupied = set(p.coord for p in self.red + self.blue)
+		hits = mcts.PlayS('blue', self.Clone())
+		#print(hits)
+		for idx, p in enumerate(self.blue):
+			if hits[idx] is None:
+				action2.append(4)
+				continue
+			mv = Coord(hits[idx].x, hits[idx].y)
+			if mv not in occupied:
+				delta = Coord(mv.x - p.coord.x, mv.y - p.coord.y)
+					
+				dir_index = directions.index(delta)
+				action2.append(dir_index)
+
+				p.move(mv)
+				
+			else:
+				action2.append(4)
+
+
+		for idx, p in enumerate(self.red):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				self.action[idx] = 4  # action "retour arri�re"
+	
+		for idx, p in enumerate(self.blue):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				action2[idx] = 4  # action "retour arri�re"
+									
+
+		if(len(self.action) < 5):
+			##print("ACTION=", len(self.action))
+			while len(self.action) < 5:
+				self.action.append(4)
+
+		if(len(action2) < 5):
+			##print("ACTION=", len(self.action))
+			while len(action2) < 5:
+				action2.append(4)
+
+
+		if ind == 2:self.action = action2
+		
+		#self.action.extend(action2)
+		#print(self.action)
 		
 		#throw
 		for p in self.red:
@@ -1076,15 +1279,469 @@ class Game:
 		if score < 0:
 			self.reward2 = -score
 						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
 
 		if abs(score) >= 600:
-			if score > 0:return 1
-			elif score < 0:return -1
+			if score > 0:
+				self.reward = 10000
+				self.reward2 = -10000
+				return 1
+			elif score < 0:
+				self.reward = -10000
+				self.reward2 = 10000
+				return -1
 		
-		if len(self.red) == 0:return -1
-		if len(self.blue) == 0:return 1
+		if len(self.red) == 0:
+			self.reward = -10000
+			self.reward2 = 10000
+			return -1
+		if len(self.blue) == 0:
+			self.reward = 10000
+			self.reward2 = -10000
+			return 1
+
+		return -2
+
+	def PlayX10TerrMCTSAH(self, ind, policy):
+
+		ARG_MAX = False
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1), Coord(0,0)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+		self.action = []
+
+		action2 = []
+			
+		player = self.red if ind == 2 else self.blue
+		player2 = self.blue if ind == 2 else self.red
+		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
+		policy.eval()
+		with torch.no_grad():
+			state_tensor = encode_ALL_RL(self.grid, player, player2, self)  # shape (canaux, H, W)
+			# Pour le batch, on ajoute une dimension (batch=1)
+			state_tensor_batch = state_tensor.unsqueeze(0)
+			logits = policy(state_tensor_batch)  # (1, num_players=5, num_actions=5)
+			logits = logits.squeeze(0)  # (5, 5) pour chaque joueur
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = F.softmax(logits, dim=-1)  # (5, 5)
+				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
+				actions_list = actions.tolist()
+
+			##print("Actions pr�dites par joueur :", actions_list)
+
+
+		if ind == 1:
+			mcts = MCTS()
+
+			hits = mcts.PlayS('red', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.red):
+				if hits[idx] is None:
+					self.action.append(4)
+					continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					delta = Coord(mv.x - p.coord.x, mv.y - p.coord.y)
+								
+					dir_index = directions.index(delta)
+					self.action.append(dir_index)
+
+					p.move(mv)
+				
+				else:
+					self.action.append(4)
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.blue):
+				if actions_list[i] == 4:
+					action2.append(4)
+					continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+					action2.append(actions_list[i])
+				else:
+					action2.append(4)
+
+		
+		else:
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.red):
+				if actions_list[i] == 4:
+					self.action.append(4)
+					continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+					self.action.append(actions_list[i])
+				else:
+					self.action.append(4)
+
+			
+			mcts = MCTS()
+
+			occupied = set(p.coord for p in self.red + self.blue)
+			hits = mcts.PlayS('blue', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.blue):
+				if hits[idx] is None:
+					action2.append(4)
+					continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					delta = Coord(mv.x - p.coord.x, mv.y - p.coord.y)
+					
+					dir_index = directions.index(delta)
+					action2.append(dir_index)
+
+					p.move(mv)
+				
+				else:
+					action2.append(4)
+
+
+		for idx, p in enumerate(self.red):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				self.action[idx] = 4  # action "retour arri�re"
+	
+		for idx, p in enumerate(self.blue):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				action2[idx] = 4  # action "retour arri�re"
+									
+
+		if(len(self.action) < 5):
+			##print("ACTION=", len(self.action))
+			while len(self.action) < 5:
+				self.action.append(4)
+
+		if(len(action2) < 5):
+			##print("ACTION=", len(self.action))
+			while len(action2) < 5:
+				action2.append(4)
+
+
+		if ind == 2:self.action = action2
+		
+		#self.action.extend(action2)
+		#print(self.action)
+		
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		#self.remove_wet_players()
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		#self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		self.reward2 = 0
+		if score > 0:
+			self.reward = score
+
+		if score < 0:
+			self.reward2 = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:
+				self.reward = 10000
+				self.reward2 = -10000
+				return 1
+			elif score < 0:
+				self.reward = -10000
+				self.reward2 = 10000
+				return -1
+		
+		if len(self.red) == 0:
+			self.reward = -10000
+			self.reward2 = 10000
+			return -1
+		if len(self.blue) == 0:
+			self.reward = 10000
+			self.reward2 = -10000
+			return 1
+
+		return -2
+
+	def PlayX10TerrNN_vs_MCTS(self, ind, policy):
+
+		ARG_MAX = False
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1), Coord(0,0)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+		self.action = []
+
+		action2 = []
+			
+		player = self.red if ind == 1 else self.blue
+		player2 = self.blue if ind == 1 else self.red
+		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
+		policy.eval()
+		with torch.no_grad():
+			state_tensor = encode_ALL_RL(self.grid, player, player2, self)  # shape (canaux, H, W)
+			# Pour le batch, on ajoute une dimension (batch=1)
+			state_tensor_batch = state_tensor.unsqueeze(0)
+			logits = policy(state_tensor_batch)  # (1, num_players=5, num_actions=5)
+			logits = logits.squeeze(0)  # (5, 5) pour chaque joueur
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = F.softmax(logits, dim=-1)  # (5, 5)
+				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
+				actions_list = actions.tolist()
+
+			##print("Actions pr�dites par joueur :", actions_list)
+
+
+		if ind == 1:
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.red):
+				if actions_list[i] == 4:
+					self.action.append(4)
+					continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+					self.action.append(actions_list[i])
+				else:
+					self.action.append(4)
+
+		
+			mcts = MCTS()
+
+			occupied = set(p.coord for p in self.red + self.blue)
+			hits = mcts.PlayS('blue', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.blue):
+				if hits[idx] is None:
+					action2.append(4)
+					continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					delta = Coord(mv.x - p.coord.x, mv.y - p.coord.y)
+					
+					dir_index = directions.index(delta)
+					action2.append(dir_index)
+
+					p.move(mv)
+				
+				else:
+					action2.append(4)
+
+			
+		else:
+
+			mcts = MCTS()
+
+			hits = mcts.PlayS('red', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.red):
+				if hits[idx] is None:
+					self.action.append(4)
+					continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					delta = Coord(mv.x - p.coord.x, mv.y - p.coord.y)
+								
+					dir_index = directions.index(delta)
+					self.action.append(dir_index)
+
+					p.move(mv)
+				
+				else:
+					self.action.append(4)
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.blue):
+				if actions_list[i] == 4:
+					action2.append(4)
+					continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+					action2.append(actions_list[i])
+				else:
+					action2.append(4)
+		
+
+
+		for idx, p in enumerate(self.red):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				self.action[idx] = 4  # action "retour arri�re"
+	
+		for idx, p in enumerate(self.blue):
+			#if p.wetness >= 100:
+			#	continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				action2[idx] = 4  # action "retour arri�re"
+									
+
+		if(len(self.action) < 5):
+			##print("ACTION=", len(self.action))
+			while len(self.action) < 5:
+				self.action.append(4)
+
+		if(len(action2) < 5):
+			##print("ACTION=", len(self.action))
+			while len(action2) < 5:
+				action2.append(4)
+
+
+		if ind == 2:self.action = action2
+		
+		#self.action.extend(action2)
+		#print(self.action)
+		
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		#self.remove_wet_players()
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		#self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		self.reward2 = 0
+		if score > 0:
+			self.reward = score
+
+		if score < 0:
+			self.reward2 = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:
+				self.reward = 10000
+				self.reward2 = -10000
+				return 1
+			elif score < 0:
+				self.reward = -10000
+				self.reward2 = 10000
+				return -1
+		
+		if len(self.red) == 0:
+			self.reward = -10000
+			self.reward2 = 10000
+			return -1
+		if len(self.blue) == 0:
+			self.reward = 10000
+			self.reward2 = -10000
+			return 1
 
 		return -2
 
@@ -1115,7 +1772,7 @@ class Game:
 					actions = torch.multinomial(probs, num_samples=1).squeeze(1)
 					actions_list = actions.tolist()
 
-			print("Actions pr�dites par joueur :", actions_list)
+			#print("Actions pr�dites par joueur :", actions_list)
 
 			# Actions des rouges uniquement
 			for i, p in enumerate(self.red):
@@ -1164,7 +1821,7 @@ class Game:
 					actions = torch.multinomial(probs, num_samples=1).squeeze(1)
 					actions_list = actions.tolist()
 
-			print("Actions pr�dites par joueur :", actions_list)
+			#print("Actions pr�dites par joueur :", actions_list)
 
 			# Actions des rouges uniquement
 			for i, p in enumerate(self.blue):
@@ -1215,8 +1872,8 @@ class Game:
 			if score < 0:
 				self.reward = -score
 						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
 
 		if abs(score) >= 600:
 			if score > 0:return 1
@@ -1252,167 +1909,6 @@ class Game:
 			else:
 				probs = F.softmax(logits, dim=-1)  # (5, 5)
 				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
-				actions_list = actions.tolist()
-
-			print("Actions pr�dites par joueur :", actions_list)
-
-		if ind == 1:
-			
-			# Actions des rouges uniquement
-			for i, p in enumerate(self.red):
-				if actions_list[i] == 4:continue
-				origin = Coord(p.coord.x, p.coord.y)
-				mv = origin.add(directions[actions_list[i]])
-				cell = self.grid.get(mv.x, mv.y)
-				t = cell.get_type()
-				if t != Tile.TYPE_FLOOR: continue
-				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
-					p.move(mv)
-				
-			for p in self.blue:
-				poss_moves = self.get_Move(p.coord.get_x(), p.coord.get_y())
-				if len(poss_moves) == 0:continue
-				mv = random.choice(poss_moves)
-				if mv not in occupied:
-					p.move(mv)
-
-
-			# Pour les bleus on n�ajoute rien dans self.action,
-			# ou on ajoute une action neutre si tu veux toujours m�me taille
-
-		elif ind == 2:
-			for p in self.red:
-				poss_moves = self.get_Move(p.coord.get_x(), p.coord.get_y())
-				if len(poss_moves) == 0:continue
-				mv = random.choice(poss_moves)
-				if mv not in occupied:
-					p.move(mv)
-
-
-			# Actions des rouges uniquement
-			for i, p in enumerate(self.blue):
-				if actions_list[i+5] == 4:continue
-				origin = Coord(p.coord.x, p.coord.y)
-				mv = origin.add(directions[actions_list[i+5]])
-				cell = self.grid.get(mv.x, mv.y)
-				t = cell.get_type()
-				if t != Tile.TYPE_FLOOR: continue
-				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
-					p.move(mv)
-
-
-		# Correction position conflictuelle / retour arri�re
-		# Note: ici, self.action a autant d��l�ments que de joueurs concern�s (rouges ou bleus)
-		players = self.red if ind == 1 else self.blue
-		for idx, p in enumerate(players):
-			if p.wetness >= 100:
-				continue
-			occupied = set(pl.coord for pl in self.red + self.blue if pl != p)
-			if p.coord in occupied:
-				p.back_move()
-				
-		players = self.red if ind == 2 else self.blue
-		for p in players:
-			occupied = set(pl.coord for pl in self.red + self.blue if p != pl)
-			if p.coord in occupied:
-				p.back_move()
-
-		#throw
-		for p in self.red:
-			if p.splash_bombs > 0:
-				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
-				if len(zones) > 0:
-					p.thx, p.thy = zones[0]
-					p.splash_bombs-= 1
-
-					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
-					for p in players_in_zone:
-						p.wetness += 30
-
-				else:
-					p.txh, p.thy = -1, -1
-			else:
-				p.txh, p.thy = -1, -1
-
-		for p in self.blue:
-			if p.splash_bombs > 0:
-				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
-				if len(zones) > 0:
-					p.thx, p.thy = zones[0]
-					p.splash_bombs-= 1
-
-					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
-					for p in players_in_zone:
-						p.wetness += 30
-				else:
-					p.txh, p.thy = -1, -1
-			else:
-				p.txh, p.thy = -1, -1
-
-		self.remove_wet_players()
-
-		#shoot
-		self.Shoot(True)
-		self.Shoot(False)
-		self.Cooldown()
-		self.remove_wet_players()
-
-		self.get_FloorScore()
-
-		score = self.rscore - self.bscore
-
-		self.reward = 0
-		if ind == 1:
-			if score > 0:
-				self.reward = score
-
-		if ind == 2:
-			if score < 0:
-				self.reward = -score
-						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
-
-		if abs(score) >= 600:
-			if score > 0:return 1
-			elif score < 0:return -1
-		
-		if len(self.red) == 0:return -1
-		if len(self.blue) == 0:return 1
-
-		return -2
-
-	def PlayX_NN10N(self, ind=1):
-
-		ARG_MAX = False
-
-		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1)]
-
-		occupied = set(p.coord for p in self.red + self.blue)
-		self.action = []
-
-		
-		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
-		self.nnz.eval()
-		with torch.no_grad():
-			state_tensor = encode_ALL_RL_numpy(self.grid, self.red, self.blue)  # (canaux, H, W)
-
-			# Ajouter une dimension batch au début : shape devient (1, canaux, H, W)
-			state_tensor_batch = np.expand_dims(state_tensor, axis=0)
-
-			# Passage dans le réseau numpy
-			logits = self.nnz.forward(state_tensor_batch)  # shape (1, num_players, num_actions)
-
-			# Supprimer la dimension batch pour avoir (num_players, num_actions)
-			logits = np.squeeze(logits, axis=0)
-
-
-			if ARG_MAX:
-				actions = torch.argmax(logits, dim=1)  # (5,)
-				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
-			else:
-				probs = softmax(logits, axis=-1)
-				actions = multinomial_numpy(probs)
 				actions_list = actions.tolist()
 
 			#print("Actions pr�dites par joueur :", actions_list)
@@ -1531,8 +2027,345 @@ class Game:
 			if score < 0:
 				self.reward = -score
 						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:return 1
+			elif score < 0:return -1
+		
+		if len(self.red) == 0:return -1
+		if len(self.blue) == 0:return 1
+
+		return -2
+
+	def PlayX_NN10N(self, ind=1):
+
+		ARG_MAX = False
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+		self.action = []
+
+		
+		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
+		self.nnz.eval()
+		with torch.no_grad():
+			player = self.red if ind == 1 else self.blue
+			player2 = self.blue if ind == 1 else self.red
+			state_tensor = encode_ALL_RL_numpy(self.grid, player, player2, self)  # (canaux, H, W)
+
+			# Ajouter une dimension batch au début : shape devient (1, canaux, H, W)
+			state_tensor_batch = np.expand_dims(state_tensor, axis=0)
+
+			# Passage dans le réseau numpy
+			logits = self.nnz.forward(state_tensor_batch)  # shape (1, num_players, num_actions)
+
+			# Supprimer la dimension batch pour avoir (num_players, num_actions)
+			logits = np.squeeze(logits, axis=0)
+
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = softmax(logits, axis=-1)
+				actions = multinomial_numpy(probs)
+				actions_list = actions.tolist()
+
+			##print("Actions pr�dites par joueur :", actions_list)
+
+		if ind == 1:
+			
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.red):
+				if actions_list[i] == 4:continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+				
+			for p in self.blue:
+				poss_moves = self.get_Move(p.coord.get_x(), p.coord.get_y())
+				if len(poss_moves) == 0:continue
+				mv = random.choice(poss_moves)
+				if mv not in occupied:
+					p.move(mv)
+
+
+			# Pour les bleus on n�ajoute rien dans self.action,
+			# ou on ajoute une action neutre si tu veux toujours m�me taille
+
+		elif ind == 2:
+			for p in self.red:
+				poss_moves = self.get_Move(p.coord.get_x(), p.coord.get_y())
+				if len(poss_moves) == 0:continue
+				mv = random.choice(poss_moves)
+				if mv not in occupied:
+					p.move(mv)
+
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.blue):
+				if actions_list[i] == 4:continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+
+
+		# Correction position conflictuelle / retour arri�re
+		# Note: ici, self.action a autant d��l�ments que de joueurs concern�s (rouges ou bleus)
+		players = self.red if ind == 1 else self.blue
+		for idx, p in enumerate(players):
+			if p.wetness >= 100:
+				continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl != p)
+			if p.coord in occupied:
+				p.back_move()
+				
+		players = self.red if ind == 2 else self.blue
+		for p in players:
+			occupied = set(pl.coord for pl in self.red + self.blue if p != pl)
+			if p.coord in occupied:
+				p.back_move()
+
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		self.remove_wet_players()
+
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		if ind == 1:
+			if score > 0:
+				self.reward = score
+
+		if ind == 2:
+			if score < 0:
+				self.reward = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:return 1
+			elif score < 0:return -1
+		
+		if len(self.red) == 0:return -1
+		if len(self.blue) == 0:return 1
+
+		return -2
+	
+	
+
+	def PlayX_NN10NMCTS(self, ind=1):
+
+		ARG_MAX = False
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+		self.action = []
+
+		
+		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
+		self.nnz.eval()
+		with torch.no_grad():
+			player = self.red if ind == 1 else self.blue
+			player2 = self.blue if ind == 1 else self.red
+			state_tensor = encode_ALL_RL_numpy(self.grid, player, player2, self)  # (canaux, H, W)
+
+			# Ajouter une dimension batch au début : shape devient (1, canaux, H, W)
+			state_tensor_batch = np.expand_dims(state_tensor, axis=0)
+
+			# Passage dans le réseau numpy
+			logits = self.nnz.forward(state_tensor_batch)  # shape (1, num_players, num_actions)
+
+			# Supprimer la dimension batch pour avoir (num_players, num_actions)
+			logits = np.squeeze(logits, axis=0)
+
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = softmax(logits, axis=-1)
+				actions = multinomial_numpy(probs)
+				actions_list = actions.tolist()
+
+			##print("Actions pr�dites par joueur :", actions_list)
+
+		if ind == 1:
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.red):
+				if actions_list[i] == 4:continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+
+			mcts = MCTS()
+
+			hits = mcts.PlayS('blue', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.blue):
+				if hits[idx] is None:continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					p.move(mv)
+
+			
+			
+
+
+			# Pour les bleus on n�ajoute rien dans self.action,
+			# ou on ajoute une action neutre si tu veux toujours m�me taille
+
+		elif ind == 2:
+			
+			mcts = MCTS()
+
+			hits = mcts.PlayS('red', self.Clone())
+			for idx, p in enumerate(self.red):
+				if hits[idx] is None:continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					p.move(mv)
+			
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.blue):
+				if actions_list[i] == 4:continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+				
+
+
+		# Correction position conflictuelle / retour arri�re
+		# Note: ici, self.action a autant d��l�ments que de joueurs concern�s (rouges ou bleus)
+		players = self.red if ind == 1 else self.blue
+		for idx, p in enumerate(players):
+			if p.wetness >= 100:
+				continue
+			occupied = set(pl.coord for pl in self.red + self.blue if pl.coord != p.coord)
+			if p.coord in occupied:
+				p.back_move()
+				
+		players = self.red if ind == 2 else self.blue
+		for p in players:
+			occupied = set(pl.coord for pl in self.red + self.blue if p.coord != pl.coord)
+			if p.coord in occupied:
+				p.back_move()
+
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		self.remove_wet_players()
+
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		if ind == 1:
+			if score > 0:
+				self.reward = score
+
+		if ind == 2:
+			if score < 0:
+				self.reward = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
 
 		if abs(score) >= 600:
 			if score > 0:return 1
@@ -1574,7 +2407,7 @@ class Game:
 				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
 				actions_list = actions.tolist()
 
-			#print("Actions pr�dites par joueur :", actions_list)
+			##print("Actions pr�dites par joueur :", actions_list)
 
 		
 			
@@ -1595,7 +2428,7 @@ class Game:
 				self.action.append(4)
 
 		if(len(self.action) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(self.action) < 5:
 				self.action.append(4)
 
@@ -1616,7 +2449,7 @@ class Game:
 				action2.append(4)
 
 		if(len(action2) < 5):
-			#print("ACTION=", len(self.action))
+			##print("ACTION=", len(self.action))
 			while len(action2) < 5:
 				action2.append(4)
 
@@ -1690,17 +2523,423 @@ class Game:
 		if score < 0:
 			self.reward2 = -score
 						
-		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
-		#self.print_wetness()
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
 
 		if abs(score) >= 600:
-			if score > 0:return 1
-			elif score < 0:return -1
+			if score > 0:
+				self.reward = 10000
+				self.reward2 = -10000
+				return 1
+			elif score < 0:
+				self.reward = -10000
+				self.reward2 = 10000
+				return -1
 		
-		if len(self.red) == 0:return -1
-		if len(self.blue) == 0:return 1
+		if len(self.red) == 0:
+			self.reward = -10000
+			self.reward2 = 10000
+			return -1
+		if len(self.blue) == 0:
+			self.reward = 10000
+			self.reward2 = -10000
+			return 1
 
 		return -2
+
+	def PlayX_NN10AH5(self, policy, ind):
+
+		ARG_MAX = False
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+
+		self.action = []
+
+		action2 = []
+
+		player = self.red if ind == 1 else self.blue
+		player2 = self.blue if ind == 1 else self.red
+		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
+		policy.eval()
+		with torch.no_grad():
+			state_tensor = encode_ALL_RL(self.grid, player, player2, self)  # shape (canaux, H, W)
+			# Pour le batch, on ajoute une dimension (batch=1)
+			state_tensor_batch = state_tensor.unsqueeze(0)
+			logits = policy(state_tensor_batch)  # (1, num_players=5, num_actions=5)
+			logits = logits.squeeze(0)  # (5, 5) pour chaque joueur
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = F.softmax(logits, dim=-1)  # (5, 5)
+				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
+				actions_list = actions.tolist()
+
+			##print("Actions pr�dites par joueur :", actions_list)
+
+
+		if ind == 1:
+		
+			
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.red):
+				if actions_list[i] == 4:
+					self.action.append(4)
+					continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+					self.action.append(actions_list[i])
+				else:
+					self.action.append(4)
+
+			if(len(self.action) < 5):
+				##print("ACTION=", len(self.action))
+				while len(self.action) < 5:
+					self.action.append(4)
+
+			
+			mcts = MCTS()
+
+			hits = mcts.PlayS('blue', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.blue):
+				if hits[idx] is None:
+					continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					p.move(mv)
+				
+			
+		else:
+
+			
+			mcts = MCTS()
+
+			hits = mcts.PlayS('red', self.Clone())
+			#print(hits)
+			for idx, p in enumerate(self.red):
+				if hits[idx] is None:
+				
+					continue
+				mv = Coord(hits[idx].x, hits[idx].y)
+				if mv not in occupied:
+					
+					p.move(mv)
+				
+	
+
+			# Actions des rouges uniquement
+			for i, p in enumerate(self.blue):
+				if actions_list[i] == 4:
+					action2.append(4)
+					continue
+				origin = Coord(p.coord.x, p.coord.y)
+				mv = origin.add(directions[actions_list[i]])
+				cell = self.grid.get(mv.x, mv.y)
+				t = cell.get_type()
+				if t != Tile.TYPE_FLOOR: continue
+				if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+					p.move(mv)
+					action2.append(actions_list[i])
+				else:
+					action2.append(4)
+
+			if(len(action2) < 5):
+				##print("ACTION=", len(self.action))
+				while len(action2) < 5:
+					action2.append(4)
+
+		
+
+		# Correction position conflictuelle / retour arri�re
+		# Note: ici, self.action a autant d��l�ments que de joueurs concern�s (rouges ou bleus)
+		for idx, p in enumerate(self.red):
+			occupied = set(pl.coord for pl in self.red + self.blue if p != pl)
+			if p.coord in occupied:
+				p.back_move()
+				if ind == 1:self.action[idx] = 4
+					
+		for idx, p in enumerate(self.blue):
+			occupied = set(pl.coord for pl in self.red + self.blue if p != pl)
+			if p.coord in occupied:
+				p.back_move()
+				if ind == 2:action2[idx] = 4
+
+		#self.action.extend(action2)
+		if ind == 2:self.action = action2
+
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		#self.remove_wet_players()
+
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		#self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		self.reward2 = 0
+		if score > 0:
+			self.reward = score
+		
+		if score < 0:
+			self.reward2 = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:
+				self.reward = 10000
+				self.reward2 = -10000
+				return 1
+			elif score < 0:
+				self.reward = -10000
+				self.reward2 = 10000
+				return -1
+		
+		if len(self.red) == 0:
+			self.reward = -10000
+			self.reward2 = 10000
+			return -1
+		if len(self.blue) == 0:
+			self.reward = 10000
+			self.reward2 = -10000
+			return 1
+
+		return -2
+
+	def PlayX_NN10AH52(self, policy, ind):
+
+		ARG_MAX = False
+
+		directions = [Coord(1, 0), Coord(-1, 0), Coord(0, 1), Coord(0, -1)]
+
+		occupied = set(p.coord for p in self.red + self.blue)
+
+		self.action = []
+
+		action2 = []
+
+		player = self.red if ind == 1 else self.blue
+		player2 = self.blue if ind == 1 else self.red
+		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
+		policy.eval()
+		with torch.no_grad():
+			state_tensor = encode_ALL_RL(self.grid, player, player2, self)  # shape (canaux, H, W)
+			# Pour le batch, on ajoute une dimension (batch=1)
+			state_tensor_batch = state_tensor.unsqueeze(0)
+			logits = policy(state_tensor_batch)  # (1, num_players=5, num_actions=5)
+			logits = logits.squeeze(0)  # (5, 5) pour chaque joueur
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = F.softmax(logits, dim=-1)  # (5, 5)
+				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
+				actions_list = actions.tolist()
+
+			##print("Actions pr�dites par joueur :", actions_list)
+
+		with torch.no_grad():
+			state_tensor = encode_ALL_RL(self.grid, player2, player, self)  # shape (canaux, H, W)
+			# Pour le batch, on ajoute une dimension (batch=1)
+			state_tensor_batch = state_tensor.unsqueeze(0)
+			logits = policy(state_tensor_batch)  # (1, num_players=5, num_actions=5)
+			logits = logits.squeeze(0)  # (5, 5) pour chaque joueur
+
+			if ARG_MAX:
+				actions = torch.argmax(logits, dim=1)  # (5,)
+				actions_list2 = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
+			else:
+				probs = F.softmax(logits, dim=-1)  # (5, 5)
+				actions = torch.multinomial(probs, num_samples=1).squeeze(1)
+				actions_list2 = actions.tolist()
+
+			
+		# Actions des rouges uniquement
+		for i, p in enumerate(self.red):
+			if actions_list[i] == 4:
+				self.action.append(4)
+				continue
+			origin = Coord(p.coord.x, p.coord.y)
+			mv = origin.add(directions[actions_list[i]])
+			cell = self.grid.get(mv.x, mv.y)
+			t = cell.get_type()
+			if t != Tile.TYPE_FLOOR: continue
+			if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+				p.move(mv)
+				self.action.append(actions_list[i])
+			else:
+				self.action.append(4)
+
+		if(len(self.action) < 5):
+			##print("ACTION=", len(self.action))
+			while len(self.action) < 5:
+				self.action.append(4)
+
+			
+		# Actions des rouges uniquement
+		for i, p in enumerate(self.blue):
+			if actions_list[i] == 4:
+				action2.append(4)
+				continue
+			origin = Coord(p.coord.x, p.coord.y)
+			mv = origin.add(directions[actions_list[i]])
+			cell = self.grid.get(mv.x, mv.y)
+			t = cell.get_type()
+			if t != Tile.TYPE_FLOOR: continue
+			if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
+				p.move(mv)
+				action2.append(actions_list[i])
+			else:
+				action2.append(4)
+
+		if(len(action2) < 5):
+			##print("ACTION=", len(self.action))
+			while len(action2) < 5:
+				action2.append(4)
+				
+
+		
+
+		# Correction position conflictuelle / retour arri�re
+		# Note: ici, self.action a autant d��l�ments que de joueurs concern�s (rouges ou bleus)
+		for idx, p in enumerate(self.red):
+			occupied = set(pl.coord for pl in self.red + self.blue if p.coord != pl.coord)
+			if p.coord in occupied:
+				p.back_move()
+				if ind == 1:self.action[idx] = 4
+					
+		for idx, p in enumerate(self.blue):
+			occupied = set(pl.coord for pl in self.red + self.blue if p.coord != pl.coord)
+			if p.coord in occupied:
+				p.back_move()
+				if ind == 2:action2[idx] = 4
+
+		#self.action.extend(action2)
+		if ind == 2:self.action = action2
+
+		#throw
+		for p in self.red:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.red, self.blue, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		for p in self.blue:
+			if p.splash_bombs > 0:
+				zones = self.get_best_zone_for_agent(p, self.blue, self.red, width=self.grid.width, height=self.grid.height)
+				if len(zones) > 0:
+					p.thx, p.thy = zones[0]
+					p.splash_bombs-= 1
+
+					players_in_zone = self.get_neighbors_around(p.thx, p.thy, self.red + self.blue)
+					for p in players_in_zone:
+						p.wetness += 30
+				else:
+					p.txh, p.thy = -1, -1
+			else:
+				p.txh, p.thy = -1, -1
+
+		#self.remove_wet_players()
+
+		#shoot
+		self.Shoot(True)
+		self.Shoot(False)
+		self.Cooldown()
+		#self.remove_wet_players()
+
+		self.get_FloorScore()
+
+		score = self.rscore - self.bscore
+
+		self.reward = 0
+		self.reward2 = 0
+		if score > 0:
+			self.reward = score
+		
+		if score < 0:
+			self.reward2 = -score
+						
+		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#self.#print_wetness()
+
+		if abs(score) >= 600:
+			if score > 0:
+				self.reward = 10000
+				self.reward2 = -10000
+				return 1
+			elif score < 0:
+				self.reward = -10000
+				self.reward2 = 10000
+				return -1
+		
+		if len(self.red) == 0:
+			self.reward = -10000
+			self.reward2 = 10000
+			return -1
+		if len(self.blue) == 0:
+			self.reward = 10000
+			self.reward2 = -10000
+			return 1
+
+		return -2
+
 
 
 	def Play(self):
@@ -1745,7 +2984,7 @@ class Game:
 
 		
 		
-		print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
+		#print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
 		self.print_wetness()
 
 		if abs(score) >= 600:
@@ -1800,7 +3039,7 @@ class Game:
 			if idx != -1:
 				cover = self.get_cover_modifier(pr, team2[idx])
 				team2[idx].wetness += pr.soakingPower * cover
-				#print(f"{'Red' if rb else 'Blue'} agent at {pr.coord} shoots at {team2[idx].coord} -> wetness: {team2[idx].wetness}")
+				##print(f"{'Red' if rb else 'Blue'} agent at {pr.coord} shoots at {team2[idx].coord} -> wetness: {team2[idx].wetness}")
 				if team2[idx].wetness >= 100:
 					team2[idx].dead = 1.0
 
@@ -1841,6 +3080,8 @@ class Game:
 		else:
 			self.bscore += -r
 
+		return r
+
 
 	def get_cover_modifier(self, target, shooter):
 		dx = target.coord.x - shooter.coord.x
@@ -1878,10 +3119,10 @@ def spawn(grid):
 #-------------------ENCODING NN ----------------------------
 import torch
 
-def encode_players(players, grid_height, grid_width):
+def encode_players(players, grid_height, grid_width, game):
 	# On utilise 7 canaux :
 	# cooldown, bombs, wetness, range, power, is_red, is_blue
-	tensor = torch.zeros((40, grid_height, grid_width), dtype=torch.float32)
+	tensor = torch.zeros((45, grid_height, grid_width), dtype=torch.float32)
 
 	base = 0
 	for player in players:
@@ -1902,8 +3143,10 @@ def encode_players(players, grid_height, grid_width):
 				tensor[base+6, y, x] = 1.0  # canal blue
 
 			tensor[base+7, y, x] = player.dead
+			score = game.rscore if players[0].team == 'red' else game.bscore
+			tensor[base + 8, y, x] = score / 1500.0
 
-			base += 8
+			base += 9
 
 	return tensor  # shape : (7, H, W)
 
@@ -1927,10 +3170,10 @@ def encode_grid(grid):
 
 import numpy as np
 
-def encode_players_numpy(players, grid_height, grid_width):
+def encode_players_numpy(players, grid_height, grid_width, game):
 	# On utilise 8 canaux par joueur (comme dans ton code PyTorch)
 	# cooldown, bombs, wetness, range, power, is_red, is_blue, dead
-	tensor = np.zeros((40, grid_height, grid_width), dtype=np.float32)
+	tensor = np.zeros((45, grid_height, grid_width), dtype=np.float32)
 
 	base = 0
 	for player in players:
@@ -1950,8 +3193,10 @@ def encode_players_numpy(players, grid_height, grid_width):
 				tensor[base + 6, y, x] = 1.0
 
 			tensor[base + 7, y, x] = player.dead
+			score = game.rscore if players[0].team == 'red' else game.bscore
+			tensor[base + 8, y, x] = score / 1500.0
 
-			base += 8
+			base += 9
 
 	return tensor  # shape : (40, H, W)
 
@@ -2005,17 +3250,17 @@ def complete_team(players, team, n=5):
 	return players_completed
 
 
-def encode_ALL_RL(grid, red, blue):
+def encode_ALL_RL(grid, red, blue, game):
 	red_complete = complete_team(red, "red", 5)
 	blue_complete = complete_team(blue, "blue", 5)
 
-	tensor_red = encode_players(red_complete, 10, 20)
-	tensor_blue = encode_players(blue_complete, 10, 20)
+	tensor_red = encode_players(red_complete, 10, 20, game)
+	tensor_blue = encode_players(blue_complete, 10, 20, game)
 	tensor_grid = encode_grid(grid)
 
-	#print(tensor_red.shape)   # (channels_red, H, W)
-	#print(tensor_blue.shape)  # (channels_blue, H, W)
-	#print(tensor_grid.shape)  # (channels_grid, H, W)
+	##print(tensor_red.shape)   # (channels_red, H, W)
+	##print(tensor_blue.shape)  # (channels_blue, H, W)
+	##print(tensor_grid.shape)  # (channels_grid, H, W)
 
 	input_tensor = torch.cat([
 		tensor_red,
@@ -2026,12 +3271,12 @@ def encode_ALL_RL(grid, red, blue):
 
 import numpy as np
 
-def encode_ALL_RL_numpy(grid, red, blue):
+def encode_ALL_RL_numpy(grid, red, blue, game):
 	red_complete = complete_team(red, "red", 5)
 	blue_complete = complete_team(blue, "blue", 5)
 
-	tensor_red = encode_players_numpy(red_complete, 10, 20)   # (40, 20, 10)
-	tensor_blue = encode_players_numpy(blue_complete, 10, 20) # (40, 20, 10)
+	tensor_red = encode_players_numpy(red_complete, 10, 20, game)   # (40, 20, 10)
+	tensor_blue = encode_players_numpy(blue_complete, 10, 20, game) # (40, 20, 10)
 	tensor_grid = encode_grid_numpy(grid)                     # (3, 20, 10)
 
 	# concaténation sur l'axe des canaux (axis=0)
@@ -2119,15 +3364,21 @@ class ValueNetA(nn.Module):
 		x = self.pool(self.conv(x)).view(x.size(0), -1)
 		return self.fc(x)
 
-class PolicyNet(nn.Module):
-	def __init__(self, num_players=10, num_actions=5):
+class PolicyNetOO(nn.Module):
+	def __init__(self, num_players=5, num_actions=5):
 		super().__init__()
-		self.conv1 = nn.Conv2d(83, 8, 3, padding=1)
+		self.conv1 = nn.Conv2d(93, 8, 3, padding=1)
 		self.conv2 = nn.Conv2d(8, 16, 3, padding=1)
 		self.conv3 = nn.Conv2d(16, 16, 3, padding=1)
 		self.relu = nn.ReLU()
 		self.pool = nn.AdaptiveAvgPool2d(1)
-		self.fc = nn.Linear(16, num_players * num_actions)
+		self.fc1 = nn.Linear(16, 64)
+		self.fc2 = nn.Linear(64, 128)
+		self.fc3 = nn.Linear(128, num_players * num_actions)
+		
+		self.dropout1 = nn.Dropout(p=0.3)  # Dropout après fc1
+		self.dropout2 = nn.Dropout(p=0.3)  # Dropout après fc2 (optionnel)
+
 		self.num_players = num_players
 		self.num_actions = num_actions
 
@@ -2136,24 +3387,93 @@ class PolicyNet(nn.Module):
 		x = self.relu(self.conv2(x))
 		x = self.relu(self.conv3(x))
 		x = self.pool(x).view(x.size(0), -1)
-		return self.fc(x).view(-1, self.num_players, self.num_actions)
+		x = self.relu(self.fc1(x))
+		x = self.dropout1(x)
+		x = self.relu(self.fc2(x))
+		x = self.dropout2(x)
+		return self.fc3(x).view(-1, self.num_players, self.num_actions)
+
+import torch
+import torch.nn as nn
+
+class PolicyNet(nn.Module):
+	def __init__(self, num_players=5, num_actions=5):
+		super().__init__()
+		self.conv1 = nn.Conv2d(93, 8, 3, padding=1)
+		self.bn1 = nn.BatchNorm2d(8)
+
+		self.conv2 = nn.Conv2d(8, 16, 3, padding=1)
+		self.bn2 = nn.BatchNorm2d(16)
+
+		self.conv3 = nn.Conv2d(16, 16, 3, padding=1)
+		self.bn3 = nn.BatchNorm2d(16)
+
+		self.pool = nn.AdaptiveAvgPool2d(1)
+
+		self.fc1 = nn.Linear(16, 64)
+		self.bn_fc1 = nn.BatchNorm1d(64)
+
+		self.fc2 = nn.Linear(64, 128)
+		self.bn_fc2 = nn.BatchNorm1d(128)
+
+		self.fc3 = nn.Linear(128, num_players * num_actions)
+
+		self.dropout1 = nn.Dropout(p=0.3)
+		self.dropout2 = nn.Dropout(p=0.3)
+
+		self.relu = nn.ReLU()
+
+		self.num_players = num_players
+		self.num_actions = num_actions
+
+	def forward(self, x):
+		x = self.relu(self.bn1(self.conv1(x)))
+		x = self.relu(self.bn2(self.conv2(x)))
+		x = self.relu(self.bn3(self.conv3(x)))
+		x = self.pool(x).view(x.size(0), -1)  # shape: (B, 16)
+		
+		x = self.relu(self.bn_fc1(self.fc1(x)))
+		x = self.dropout1(x)
+		x = self.relu(self.bn_fc2(self.fc2(x)))
+		x = self.dropout2(x)
+
+		return self.fc3(x).view(-1, self.num_players, self.num_actions)
+
+
 
 class ValueNet(nn.Module):
 	def __init__(self):
 		super().__init__()
-		self.conv1 = nn.Conv2d(83, 8, 3, padding=1)
-		self.conv2 = nn.Conv2d(8, 16, 3, padding=1)
-		self.conv3 = nn.Conv2d(16, 32, 3, padding=1)
-		self.relu = nn.ReLU()
+		self.conv1 = nn.Conv2d(93, 16, 3, padding=1)
+		self.bn1 = nn.BatchNorm2d(16)
+
+		self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+		self.bn2 = nn.BatchNorm2d(32)
+
+		self.conv3 = nn.Conv2d(32, 64, 3, padding=1)
+		self.bn3 = nn.BatchNorm2d(64)
+
 		self.pool = nn.AdaptiveAvgPool2d(1)
-		self.fc = nn.Linear(32, 10)
+
+		self.fc1 = nn.Linear(64, 64)
+		self.bn_fc1 = nn.BatchNorm1d(64)
+
+		self.dropout = nn.Dropout(p=0.3)
+		self.fc2 = nn.Linear(64, 5)  # ou 1 si score global
+
+		self.relu = nn.ReLU()
 
 	def forward(self, x):
-		x = self.relu(self.conv1(x))
-		x = self.relu(self.conv2(x))
-		x = self.relu(self.conv3(x))
+		x = self.relu(self.bn1(self.conv1(x)))
+		x = self.relu(self.bn2(self.conv2(x)))
+		x = self.relu(self.bn3(self.conv3(x)))
 		x = self.pool(x).view(x.size(0), -1)
-		return self.fc(x)
+
+		x = self.relu(self.bn_fc1(self.fc1(x)))
+		x = self.dropout(x)
+
+		return self.fc2(x)
+
 
 
 import torch
@@ -2332,10 +3652,10 @@ def compute_reward_from_players(game, players: list[Player], players2: list[Play
 
 	# 🧮 Reward : territoire potentiel + proximité best_pos + score + pression ennemie
 	reward = (
-		territory_gain * 0.005 +
-		proximity_to_best * 0.4 +
+		territory_gain * 0.0005 +
+		proximity_to_best * 0.5 +
 		scores_norm * 0.3 +
-		inv_dists * 0.195
+		inv_dists * 0.1995
 	)
 
 	# Normalisation finale
@@ -2447,6 +3767,9 @@ def compute_advantages(rewards, values, gamma=0.99, tau=0.95):
 	return advantages.tolist()
 
 
+def get_mcts_probability(current_time, max_time):
+	elapsed = current_time / max_time
+	return max(0.7, 0.9 - 0.2 * elapsed)  # décroît linéairement de 0.9 à 0.5
 
 
 def TrainPPO():
@@ -2466,7 +3789,7 @@ def TrainPPO():
 	MAX_EPISODE = 200
 	total_loss_ep = 0
 
-	MAX_EPISODE_T = time.perf_counter() + 5 * 60
+	MAX_EPISODE_T = time.perf_counter() + 10 * 60
 	episode = 0
 
 	index = 0
@@ -2494,10 +3817,10 @@ def TrainPPO():
 		while I < 100:
 			# encoder l'�tat complet avec encode_ALL_RL (retourne un tensor)
 			state_tensor = []
-			#if ind == 1:
-			state_tensor = encode_ALL_RL(grid, game.red, game.blue)  # shape (canaux, H, W)
-			#else:
-			#	state_tensor = encode_ALL_RL(grid, game.blue, game.red)
+			if ind == 1:
+				state_tensor = encode_ALL_RL(grid, game.red, game.blue, game)  # shape (canaux, H, W)
+			else:
+				state_tensor = encode_ALL_RL(grid, game.blue, game.red, game)
 
 			# Pour le batch, on ajoute une dimension (batch=1)
 			state_tensor_batch = state_tensor.unsqueeze(0)  # shape (1, C, H, W)
@@ -2505,24 +3828,38 @@ def TrainPPO():
 			state_tab.append(state_tensor.clone())  # sauvegarder l��tat (clone pour �viter pointer sur la m�me m�moire)
 
 			won = -2
-			if (I %2) == 0:
+			now = time.perf_counter()
+			progress = now / MAX_EPISODE_T
+			p_mcts = get_mcts_probability(now, MAX_EPISODE_T)
+
+			if (I % 4) == 0:
 				won = game.PlayX10Terr(ind)
+			elif (I % 4) == 1:
+				won = game.PlayX10TerrMCTS(ind)
+			elif (I % 4) == 2:
+				won = game.PlayX10TerrMCTSAH(ind, policy_net_old)
 			else:
-				won = game.PlayX_NN10AH(policy_net_old)
+				won = game.PlayX_NN10AH5(policy_net_old, ind)
+
 			game.remove_wet_players()
 
 			player = []
 			if ind == 1:player = game.red
 			else: player = game.blue
 
-			reward = compute_reward_from_players(game, complete_team(game.red, "red"), complete_team(game.blue, "blue"), game.reward)
-			reward2 = compute_reward_from_players(game, complete_team(game.blue, "blue"), complete_team(game.red, "red"), game.reward2)
-			combined_reward = torch.cat([reward, reward2])  # shape (5,)
+			reward = []
+			if ind == 1:
+				reward = compute_reward_from_players(game, complete_team(game.red, "red"), complete_team(game.blue, "blue"), game.reward)
+			else:
+				reward = compute_reward_from_players(game, complete_team(game.blue, "blue"), complete_team(game.red, "red"), game.reward)
+			#reward2 = compute_reward_from_players(game, complete_team(game.blue, "blue"), complete_team(game.red, "red"), game.reward2)
+			combined_reward = reward #torch.cat([reward, reward2])  # shape (5,)
 
 			action.append(game.action.copy())    # liste d�actions (5 joueurs)
 			rewards.append(combined_reward.tolist())    # liste de rewards (5 joueurs)
 
 			# Obtenir la sortie du r�seau de valeur (valeurs par joueur)
+			value_net.eval()
 			with torch.no_grad():
 				value_output = value_net(state_tensor_batch)  # shape: (1, 5) si batch size = 1
 
@@ -2531,7 +3868,7 @@ def TrainPPO():
 
 			if won != -2:
 				break
-
+			
 			I += 1
 			turn += 1
 
@@ -2541,7 +3878,8 @@ def TrainPPO():
 		torch.autograd.set_detect_anomaly(True)
 
 		policy_net.train()
-		policy_net_old.train()
+		policy_net_old.eval()
+		value_net.train()
 
 		total_loss = 0.0
 		batch_count = 0
@@ -2560,6 +3898,9 @@ def TrainPPO():
 			
 				state_batch, reward_batch, action_batch, value_batch, adv_batch = batch  # D�baller le batch
 
+				if state_batch.size(0) <= 1:
+					continue
+
 				# Les tenseurs sont d�j� en format tensor gr�ce � CustomDataset
 				# Aucune conversion suppl�mentaire n'est n�cessaire ici
 
@@ -2567,9 +3908,9 @@ def TrainPPO():
 				action_logits = policy_net(state_batch) 
 				action_probs = F.softmax(action_logits, dim=-1)
 
-				#print(action_probs.shape)     # Devrait �tre [batch_size, n_actions]
-				#print(action_batch.shape)     # Devrait �tre [batch_size]
-				#print(action_batch)
+				##print(action_probs.shape)     # Devrait �tre [batch_size, n_actions]
+				##print(action_batch.shape)     # Devrait �tre [batch_size]
+				##print(action_batch)
 
 				action_logits_old = 0
 				action_probs_old = 0
@@ -2633,7 +3974,7 @@ def TrainPPO():
 				policy_optimizer.step()       # Mettre � jour les poids
 				
 
-				#print(f'Loss: {loss.item()}')  # Affiche la perte pour le batch actuel
+				##print(f'Loss: {loss.item()}')  # Affiche la perte pour le batch actuel
 				total_loss += ltot.item()
 				batch_count += 1
 
@@ -2709,7 +4050,8 @@ def draw_grid(grid, left_players, right_players):
 
 
 TRAIN_PPO = False
-PLAY_NN =  True
+PLAY_NN =  False
+PLAY_MCTS = True
 
 if TRAIN_PPO:
 	rng = random.Random()
@@ -2734,14 +4076,14 @@ else:
 		grid = GridMaker.init_grid(rng)
 		left_players, right_players = spawn(grid)
 		game = Game(grid, left_players, right_players)
-		if PLAY_NN:
+		if PLAY_NN or PLAY_MCTS:
 			game.init_NNUSNW()
 
 		ind = (index % 2) + 1
 		if ind == 1:
-			print("PLAY RED")
+			print("PLAY RED", ind)
 		else:
-			print("PLAY BLUE")
+			print("PLAY BLUE", ind)
 
 		index+=1
 
@@ -2756,32 +4098,48 @@ else:
 			screen.fill(WHITE)
 			draw_grid(grid, game.red, game.blue)
 
-			if not PLAY_NN:
+			if not PLAY_NN and not PLAY_MCTS:
 				won = game.Play()
+			elif PLAY_MCTS:
+				won = game.PlayX_NN10NMCTS(ind) #(ind)PlayX10TerrMCTS
 			else:
 				won = game.PlayX_NN10N(ind)
-				if won == 1:
-					winr+=1
-					if ind == 1:
-						winnn+=1
-				elif won == -1:
-					winb += 1
-					if ind == 2:
-						winnn+=1
-
-				if won != -2 and index > 0:
-					red_pct = 100 * winr / index
-					blue_pct = 100 * winb / index
-					print(f"RED = {winr} ({red_pct:.2f}%)   BLUE = {winb} ({blue_pct:.2f}%) / {index} on {ind_sim} simulations")
-						
-					nn_pct = 100 * winnn / index
-					print(f"NN = {winnn} ({nn_pct:.2f}%")
+							
 
 			ind_sim += 1
+			if ind_sim == 100:
+				sc = game.rscore - game.bscore
+				if sc > 0:
+					won = 1
+				elif sc < 0:
+					won = -1
+				else:
+					won = -3
+
+			if won == 1:
+				winr+=1
+				if ind == 1:
+					winnn+=1
+			elif won == -1:
+				winb += 1
+				if ind == 2:
+					winnn+=1
+
+			if won != -2:
+				red_pct = 100 * winr / index
+				blue_pct = 100 * winb / index
+				print(f"RED = {winr} ({red_pct:.2f}%)   BLUE = {winb} ({blue_pct:.2f}%) / {index} on {ind_sim} simulations")
+						
+				nn_pct = 100 * winnn / index
+				print(f"NN = {winnn} ({nn_pct:.2f}%")
+
+
+
+			
 
 			pygame.display.flip()
 			clock.tick(60)
-			time.sleep(0.1)
+			#time.sleep(0.1)
 
 		# Annoncer le gagnant
 		if won == 1:
@@ -2792,6 +4150,6 @@ else:
 			print(f" Unexpected winner: {won}")
 
 		# Petite pause avant la prochaine partie
-		time.sleep(2)
+		#time.sleep(2)
 
 pygame.quit()

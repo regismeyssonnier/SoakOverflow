@@ -134,6 +134,106 @@ def adaptive_avg_pool2d_numpy(x, output_size):
 
 import numpy as np
 
+class BatchNorm1d:
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True):
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+
+        self.gamma = np.ones(num_features) if affine else None
+        self.beta = np.zeros(num_features) if affine else None
+
+        self.running_mean = np.zeros(num_features) if track_running_stats else None
+        self.running_var = np.ones(num_features) if track_running_stats else None
+
+        self.training = True
+
+    def train(self):
+        self.training = True
+
+    def eval(self):
+        self.training = False
+
+    def forward(self, x):
+        x = np.asarray(x)
+        if x.shape[-1] != self.num_features:
+            raise ValueError(f"Expected last dimension to be {self.num_features}, got {x.shape[-1]}")
+
+        # Calcul mean et var sur tous les axes sauf le dernier (feature)
+        axes = tuple(i for i in range(x.ndim - 1))  # ex: (0,) pour 2D, (0,1) pour 3D
+
+        mean = np.mean(x, axis=axes, keepdims=True)  # shape compatible pour broadcast
+        var = np.var(x, axis=axes, ddof=0, keepdims=True)
+
+        x_hat = (x - mean) / np.sqrt(var + self.eps)
+
+        if self.affine:
+            # gamma et beta doivent être broadcastables sur x_hat
+            # gamma, beta ont shape (C,), on reshape en (1, 1, ..., C) selon ndim de x
+            shape = [1] * x.ndim
+            shape[-1] = self.num_features
+            gamma = self.gamma.reshape(shape)
+            beta = self.beta.reshape(shape)
+            x_hat = x_hat * gamma + beta
+
+        return x_hat
+
+
+    def __call__(self, x):
+        return self.forward(x)
+
+
+import numpy as np
+
+class BatchNorm2d:
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True):
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+
+        # Paramètres appris (gamma et beta)
+        self.gamma = np.ones((1, num_features, 1, 1)) if affine else None
+        self.beta = np.zeros((1, num_features, 1, 1)) if affine else None
+
+        # Moyenne et variance courantes (estimées pendant l'entraînement)
+        self.running_mean = np.zeros((1, num_features, 1, 1)) if track_running_stats else None
+        self.running_var = np.ones((1, num_features, 1, 1)) if track_running_stats else None
+
+        self.training = True
+
+    def train(self):
+        self.training = True
+
+    def eval(self):
+        self.training = False
+
+    def forward(self, x):
+        if x.ndim != 4 or x.shape[1] != self.num_features:
+            raise ValueError(f"Expected input of shape (N, {self.num_features}, H, W), got {x.shape}")
+
+        # Moyenne et variance sur (N, H, W) pour chaque canal C
+        mean = np.mean(x, axis=(0, 2, 3), keepdims=True)  # shape (1, C, 1, 1)
+        var = np.var(x, axis=(0, 2, 3), ddof=0, keepdims=True)
+
+        x_hat = (x - mean) / np.sqrt(var + self.eps)
+
+        if self.affine:
+            # reshape pour broadcast (C,) → (1, C, 1, 1)
+            gamma = self.gamma.reshape(1, -1, 1, 1)
+            beta = self.beta.reshape(1, -1, 1, 1)
+            x_hat = x_hat * gamma + beta
+
+        return x_hat
+
+
+    def __call__(self, x):
+        return self.forward(x)
+
+
 class Linear:
     def __init__(self, in_features, out_features, bias=True):
         self.in_features = in_features
@@ -160,16 +260,18 @@ class Linear:
 
 import numpy as np
 
-class PolicyNet_Numpy:
-    def __init__(self, num_players=10, num_actions=5):
+class PolicyNet_NumpyA:
+    def __init__(self, num_players=5, num_actions=5):
         self.num_players = num_players
         self.num_actions = num_actions
 
-        self.conv1 = Conv2D_Numpy(in_channels=83, out_channels=8, kernel_size=3, padding='same')
+        self.conv1 = Conv2D_Numpy(in_channels=93, out_channels=8, kernel_size=3, padding='same')
         self.conv2 = Conv2D_Numpy(in_channels=8, out_channels=16, kernel_size=3, padding='same')
         self.conv3 = Conv2D_Numpy(in_channels=16, out_channels=16, kernel_size=3, padding='same')
 
-        self.fc = Linear(in_features=16, out_features=num_players * num_actions)
+        self.fc1 = Linear(in_features=16, out_features=64)
+        self.fc2 = Linear(in_features=64, out_features=128)
+        self.fc3 = Linear(in_features=128, out_features=num_players * num_actions)
 
     def relu(self, x):
         return np.maximum(0, x)
@@ -178,18 +280,65 @@ class PolicyNet_Numpy:
         pass
 
     def forward(self, x):
-        """
-        x: numpy array of shape (batch_size, 83, H, W)
-        returns: numpy array of shape (batch_size, num_players, num_actions)
-        """
         x = self.relu(self.conv1.forward(x))
         x = self.relu(self.conv2.forward(x))
         x = self.relu(self.conv3.forward(x))
 
-        x = adaptive_avg_pool2d_numpy(x, output_size=1)  # shape: (B, C, 1, 1)
+        x = adaptive_avg_pool2d_numpy(x, output_size=1)  # shape: (B, 16, 1, 1)
         x = x.reshape(x.shape[0], -1)  # shape: (B, 16)
-        x = self.fc.forward(x)         # shape: (B, num_players * num_actions)
+
+        x = self.relu(self.fc1.forward(x))  # shape: (B, 64)
+        x = self.relu(self.fc2.forward(x))
+        x = self.fc3.forward(x)             # shape: (B, num_players * num_actions)
+
         return x.reshape(-1, self.num_players, self.num_actions)
+
+
+class PolicyNet_Numpy:
+    def __init__(self, num_players=5, num_actions=5):
+        self.num_players = num_players
+        self.num_actions = num_actions
+
+        self.conv1 = Conv2D_Numpy(in_channels=93, out_channels=8, kernel_size=3, padding='same')
+        self.bn1 = BatchNorm2d(8)
+
+        self.conv2 = Conv2D_Numpy(in_channels=8, out_channels=16, kernel_size=3, padding='same')
+        self.bn2 = BatchNorm2d(16)
+
+        self.conv3 = Conv2D_Numpy(in_channels=16, out_channels=16, kernel_size=3, padding='same')
+        self.bn3 = BatchNorm2d(16)
+
+        self.fc1 = Linear(in_features=16, out_features=64)
+        self.bn_fc1 = BatchNorm1d(64)
+
+        self.fc2 = Linear(in_features=64, out_features=128)
+        self.bn_fc2 = BatchNorm1d(128)
+
+        self.fc3 = Linear(in_features=128, out_features=num_players * num_actions)
+
+    def relu(self, x):
+        return np.maximum(0, x)
+
+    def eval(self):
+        pass
+
+    def train(self):
+        pass
+
+    def forward(self, x):
+        x = self.relu(self.bn1.forward(self.conv1.forward(x)))
+        x = self.relu(self.bn2.forward(self.conv2.forward(x)))
+        x = self.relu(self.bn3.forward(self.conv3.forward(x)))
+
+        x = adaptive_avg_pool2d_numpy(x, output_size=1)  # shape: (B, 16, 1, 1)
+        x = x.reshape(x.shape[0], -1)  # shape: (B, 16)
+
+        x = self.relu(self.bn_fc1.forward(self.fc1.forward(x)))  # shape: (B, 64)
+        x = self.relu(self.bn_fc2.forward(self.fc2.forward(x)))  # shape: (B, 128)
+        x = self.fc3.forward(x)                                   # shape: (B, num_players * num_actions)
+
+        return x.reshape(-1, self.num_players, self.num_actions)
+
 
     import torch
 
