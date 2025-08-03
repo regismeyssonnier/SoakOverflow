@@ -17,4 +17,6 @@ Look at the code to use different NN, and change.
 
 The file soakonlinenn.py is for using on codingame. You have to change the header code like  conv1_weight; etc... to change the weight NN.
 
+## 3. Update
 
+The update can be non retrocompatible but are better.
