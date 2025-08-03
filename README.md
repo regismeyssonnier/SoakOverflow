@@ -1,5 +1,5 @@
 # SoakOverflow
-Summer challenge 2025
+Summer challenge 2025 : https://www.codingame.com/ide/puzzle/soak-overflow
 
 ## 1. Run
 
