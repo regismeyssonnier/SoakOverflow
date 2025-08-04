@@ -113,7 +113,7 @@ class Hit:
 class MCTS:
 	def __init__(self):
 		self.C = math.sqrt(0.5)
-		self.time_limit = 35  # ms (� g�rer selon ton environnement)
+		self.time_limit = 50  # ms (� g�rer selon ton environnement)
 		self.ROLLOUT_SZ = 5
 		self.NODE = 0
 		self.rand = random.Random()

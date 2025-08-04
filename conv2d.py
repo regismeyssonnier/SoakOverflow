@@ -260,7 +260,7 @@ class Linear:
 
 import numpy as np
 
-class PolicyNet_NumpyA:
+class PolicyNet_Numpy:
     def __init__(self, num_players=5, num_actions=5):
         self.num_players = num_players
         self.num_actions = num_actions
@@ -274,7 +274,8 @@ class PolicyNet_NumpyA:
         self.fc3 = Linear(in_features=128, out_features=num_players * num_actions)
 
     def relu(self, x):
-        return np.maximum(0, x)
+        #return np.maximum(0, x)
+        return np.tanh(x)
 
     def eval(self):
         pass
@@ -294,7 +295,7 @@ class PolicyNet_NumpyA:
         return x.reshape(-1, self.num_players, self.num_actions)
 
 
-class PolicyNet_Numpy:
+class PolicyNet_NumpyBc:
     def __init__(self, num_players=5, num_actions=5):
         self.num_players = num_players
         self.num_actions = num_actions

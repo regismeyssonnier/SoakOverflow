@@ -10,7 +10,6 @@ from datetime import timedelta
 from conv2d import *
 from weights_unicode import *
 from mcts import *
-import matplotlib.pyplot as plt
 
 # Constants couleurs
 WHITE = (255, 255, 255)
@@ -629,11 +628,11 @@ class Game:
 		self.nnz.fc3.weight = decode_unicode_string_to_weights(fc3_weight, shape=fc3_weight_shape)
 		self.nnz.fc3.bias = decode_unicode_string_to_weights(fc3_bias, shape=fc3_bias_shape)
 		
-		#self.load_batchnorm_eval_only(self.nnz.bn1, bn1_weight, bn1_bias, bn1_weight_shape)
-		#self.load_batchnorm_eval_only(self.nnz.bn2, bn2_weight, bn2_bias, bn2_weight_shape)
-		#self.load_batchnorm_eval_only(self.nnz.bn3, bn3_weight, bn3_bias, bn3_weight_shape)
-		#self.load_batchnorm_eval_only(self.nnz.bn_fc1, bn_fc1_weight, bn_fc1_bias, bn_fc1_weight_shape)
-		#self.load_batchnorm_eval_only(self.nnz.bn_fc2, bn_fc2_weight, bn_fc2_bias, bn_fc2_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn1, bn1_weight, bn1_bias, bn1_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn2, bn2_weight, bn2_bias, bn2_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn3, bn3_weight, bn3_bias, bn3_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn_fc1, bn_fc1_weight, bn_fc1_bias, bn_fc1_weight_shape)
+		self.load_batchnorm_eval_only(self.nnz.bn_fc2, bn_fc2_weight, bn_fc2_bias, bn_fc2_weight_shape)
 				
 
 	def get_best_zone_for_agent(self, agent: Player, my_agents: list[Player], opp_agents: list[Player], width: int, height: int):
@@ -1285,17 +1284,21 @@ class Game:
 
 		if abs(score) >= 600:
 			if score > 0:
-
+				self.reward = 2000
+				self.reward2 = 0
 				return 1
 			elif score < 0:
-			
+				self.reward = 0
+				self.reward2 = 2000
 				return -1
 		
 		if len(self.red) == 0:
-			
+			self.reward = 0
+			self.reward2 = 2000
 			return -1
 		if len(self.blue) == 0:
-		
+			self.reward = 2000
+			self.reward2 = 0
 			return 1
 
 		return -2
@@ -1723,17 +1726,21 @@ class Game:
 
 		if abs(score) >= 600:
 			if score > 0:
-				
+				self.reward = 10000
+				self.reward2 = -10000
 				return 1
 			elif score < 0:
-				
+				self.reward = -10000
+				self.reward2 = 10000
 				return -1
 		
 		if len(self.red) == 0:
-			
+			self.reward = -10000
+			self.reward2 = 10000
 			return -1
 		if len(self.blue) == 0:
-			
+			self.reward = 10000
+			self.reward2 = -10000
 			return 1
 
 		return -2
@@ -3389,7 +3396,7 @@ class PolicyNetOO(nn.Module):
 import torch
 import torch.nn as nn
 
-class PolicyNetBC(nn.Module):
+class PolicyNet(nn.Module):
 	def __init__(self, num_players=5, num_actions=5):
 		super().__init__()
 		self.conv1 = nn.Conv2d(93, 8, 3, padding=1)
@@ -3434,7 +3441,7 @@ class PolicyNetBC(nn.Module):
 
 
 
-class ValueNetBC(nn.Module):
+class ValueNet(nn.Module):
 	def __init__(self):
 		super().__init__()
 		self.conv1 = nn.Conv2d(93, 16, 3, padding=1)
@@ -3468,80 +3475,10 @@ class ValueNetBC(nn.Module):
 		return self.fc2(x)
 
 
-class PolicyNet(nn.Module):
-	def __init__(self, num_players=5, num_actions=5):
-		super().__init__()
-		self.conv1 = nn.Conv2d(93, 8, 3, padding=1)
-		
-		self.conv2 = nn.Conv2d(8, 16, 3, padding=1)
-		
-		self.conv3 = nn.Conv2d(16, 16, 3, padding=1)
-		
-		self.pool = nn.AdaptiveAvgPool2d(1)
-
-		self.fc1 = nn.Linear(16, 64)
-		
-		self.fc2 = nn.Linear(64, 128)
-
-		self.fc3 = nn.Linear(128, num_players * num_actions)
-
-		#self.dropout1 = nn.Dropout(p=0.3)
-		#self.dropout2 = nn.Dropout(p=0.3)
-
-		#self.relu = nn.ReLU()
-		self.relu = nn.Tanh()
-
-		self.num_players = num_players
-		self.num_actions = num_actions
-
-	def forward(self, x):
-		x = self.relu(self.conv1(x))
-		x = self.relu(self.conv2(x))
-		x = self.relu(self.conv3(x))
-		x = self.pool(x).view(x.size(0), -1)  # shape: (B, 16)
-		
-		x = self.relu(self.fc1(x))
-		#x = self.dropout1(x)
-		x = self.relu(self.fc2(x))
-		#x = self.dropout2(x)
-
-		return self.fc3(x).view(-1, self.num_players, self.num_actions)
-
-
-
-class ValueNet(nn.Module):
-	def __init__(self):
-		super().__init__()
-		self.conv1 = nn.Conv2d(93, 16, 3, padding=1)
-		
-		self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
-	
-		self.conv3 = nn.Conv2d(32, 64, 3, padding=1)
-	
-		self.pool = nn.AdaptiveAvgPool2d(1)
-
-		self.fc1 = nn.Linear(64, 64)
-	
-		#self.dropout = nn.Dropout(p=0.3)
-		self.fc2 = nn.Linear(64, 5)  # ou 1 si score global
-
-		#self.relu = nn.ReLU()
-		self.relu = nn.Tanh()
-
-	def forward(self, x):
-		x = self.relu(self.conv1(x))
-		x = self.relu(self.conv2(x))
-		x = self.relu(self.conv3(x))
-		x = self.pool(x).view(x.size(0), -1)
-
-		x = self.relu(self.fc1(x))
-		
-		return self.fc2(x)
-
 
 import torch
 
-def compute_reward_from_playersDR(game, players: list[Player], players2: list[Player], score_territory):
+def compute_reward_from_playersO(players: list[Player], score_territory):
 	N = len(players)
 
 	# R�cup�rer les features
@@ -3567,34 +3504,23 @@ def compute_reward_from_playersDR(game, players: list[Player], players2: list[Pl
 
 	reward = scores_norm + bombs_norm * 2 - wetness_norm * 0.5 - dead_norm * 1.0
 
-	reward = torch.zeros(N, dtype=torch.float)
-
 	positions = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)
-	positions2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)
+	teams = [p.team for p in players]
+
+	dists = torch.cdist(positions, positions, p=2)
+	dists.fill_diagonal_(float('inf'))
 
 	for i in range(N):
-		my_pos = positions[i]
-		r = optimal_range[i]
-		sp = soaking_power_norm[i]
-
-		for j in range(len(players2)):
-			if not players2[j].dead:
-				enemy_pos = positions2[j]
-				d = torch.norm(my_pos - enemy_pos, p=2)  # euclidean, ou utilise p=1 pour manhattan si tu préfères
-
-				if abs(d.item() - r.item()) <= 2.0:
-					reward[i] += sp * 0.3
-
+		for j in range(N):
+			if teams[i] != teams[j] and players[j].dead == 0:
+				d = dists[i, j]
+				r = optimal_range[i]
+				if abs(d - r) <= 2:
+					reward[i] += soaking_power_norm[i] * 0.3
 
 	reward_min = reward.min()
 	reward_max = reward.max()
 	reward_norm = (reward - reward_min) / (reward_max - reward_min + 1e-8)
-
-	count = 5
-	for idx, p in enumerate(players):
-		if p.wetness >= 100 or p.dead == 1.0:
-			reward_norm[idx] = 0.0
-			count-=1
 
 	return reward_norm
 
@@ -3691,7 +3617,7 @@ def compute_reward_from_playersE(game, players: list[Player], players2: list[Pla
 
 	return reward_norm
 
-def compute_reward_from_playersAAA(game, players: list[Player], players2: list[Player], score_territory):
+def compute_reward_from_players222(game, players: list[Player], players2: list[Player], score_territory):
 	
 	N = len(players)
 
@@ -3724,11 +3650,6 @@ def compute_reward_from_playersAAA(game, players: list[Player], players2: list[P
 	# On étend les dimensions pour calculer toutes les distances pairwise
 	# pos1[:, None, :] => (N, 1, 2)
 	# best_pos_tensor[None, :, :] => (1, M, 2)
-	#print("pos1 shape:", pos1.shape)
-	#print("best_pos_tensor shape:", best_pos_tensor.shape)
-
-	if best_pos_tensor.dim() == 1:
-		best_pos_tensor = best_pos_tensor.unsqueeze(0)  # passe de (2,) à (1, 2)
 
 	dists = torch.norm(pos1[:, None, :] - best_pos_tensor[None, :, :], dim=2)  # (N, M)
 
@@ -3755,13 +3676,6 @@ def compute_reward_from_playersAAA(game, players: list[Player], players2: list[P
 	reward_max = reward.max()
 	reward_norm = (reward - reward_min) / (reward_max - reward_min + 1e-8)
 
-	count = 5
-	for idx, p in enumerate(players):
-		if p.wetness >= 100 or p.dead == 1.0:
-			reward_norm[idx] = 0.0
-			count-=1
-	#print(reward_norm)
-
 	return reward_norm
 
 
@@ -3775,65 +3689,52 @@ def safe_normalize(tensor):
 
 def compute_reward_from_players(game, players: list[Player], players2: list[Player], score_territory):
 	N = len(players)
-
+	
 	# Score brut de territoire
 	scores = torch.full((N,), score_territory, dtype=torch.float)
 
 	# Positions des joueurs
-	pos1 = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)  # shape (N, 2)
-	pos2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)  # shape (M, 2)
-	dead2 = torch.tensor([p.dead for p in players2], dtype=torch.bool)  # shape (M,)
+	pos1 = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)
+	pos2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)
+	dead2 = torch.tensor([p.dead for p in players2], dtype=torch.bool)
 
 	# Si tous les ennemis sont morts, on peut retourner un reward basé sur territoire + proximité à la meilleure case
 	if dead2.all():
-		return torch.ones(N, dtype=torch.float)  # Reward maximal
+		# Tous les ennemis morts -> reward maximal
+		return torch.ones(N, dtype=torch.float)
 
-	# --- Distance de Manhattan aux ennemis vivants ---
 
-	# Calcul des distances de Manhattan manuellement (pos1: N x 2, pos2: M x 2)
-	diffs = pos1[:, None, :] - pos2[None, :, :]  # shape (N, M, 2)
-	dists = torch.sum(torch.abs(diffs), dim=2)   # shape (N, M) => distances de Manhattan
-
-	# Ignorer les ennemis morts
+	# Distance aux ennemis vivants
+	dists = torch.cdist(pos1, pos2, p=2)
 	dists[:, dead2] = float('inf')
 
-	# Trouver la distance minimale à un ennemi vivant
-	min_dists, closest_enemy_idx = torch.min(dists, dim=1)  # shape (N,)
-	closest_enemy_pos = pos2[closest_enemy_idx]  # shape (N, 2)
-	vec_to_enemy = closest_enemy_pos - pos1      # shape (N, 2)
+	min_dists, closest_enemy_idx = torch.min(dists, dim=1)
+	closest_enemy_pos = pos2[closest_enemy_idx]
+	vec_to_enemy = closest_enemy_pos - pos1
+	inv_dists = 50.0 - (min_dists + 1e-6)
 
-	# Inverse de la distance (pour que plus proche = plus de reward)
-	inv_dists = 40.0 - (min_dists + 1e-6)  # éviter division par 0
+	# Normalisations sécurisées
+	inv_dists_norm = inv_dists
+	scores_norm = scores / 2000.0
 
-	# --- Meilleure case stratégique ---
+	# Meilleure case stratégique
 	team_color = players[0].team
 	best_pos, _ = find_best_spot_numpy_general(game, team_color)
-	best_pos_tensor = torch.tensor([best_pos], dtype=torch.float)  # shape (1, 2)
+	best_pos_tensor = torch.tensor([best_pos], dtype=torch.float)
 
-	#print(pos1.shape, best_pos_tensor.shape)
-	# Distance de Manhattan à la meilleure case
-	dists_best = torch.sum(torch.abs(pos1 - best_pos_tensor), dim=1)  # shape (N,)
-	proximity_to_closest = 40 - (dists_best + 1e-6)  # plus proche = plus de reward
-
-	# --- Normalisations (optionnelles selon ton modèle) ---
-	inv_dists_norm = inv_dists
-	scores_norm = scores / 200.0
+	dists_best = torch.norm(pos1 - best_pos_tensor, dim=1)
+	proximity_to_closest = 50 - (dists_best + 1e-6)
 	proximity_norm = proximity_to_closest
-
-	#print("proximity_norm", proximity_norm.shape)
-	#print("scores_norm", scores_norm.shape)
-	#print("inv_dists_norm", inv_dists_norm.shape)
-
 
 	# Reward pondéré
 	reward = (
-		(proximity_norm / 40.0) * 0.6 +
-		(scores_norm / 200.0) * 0.3 +
-		(inv_dists_norm / 40.0) * 0.1
+		proximity_norm / 50.0 +
+		scores_norm / 2000.0 +
+		inv_dists_norm / 50.0
 	)
 
 	# Reward normalisé final
-	reward_norm = reward * 0.95
+	reward_norm = (reward / 3.0) * 0.75
 
 	count = 5
 	for idx, p in enumerate(players):
@@ -3958,29 +3859,22 @@ def TrainPPO():
 	policy_net_old = PolicyNet()
 	value_net = ValueNet()
 
-	#update old
-	policy_net_old.load_state_dict(policy_net.state_dict())
+	
 
 	# Cr�er des optimisateurs Adam pour les deux r�seaux
-	policy_optimizer = torch.optim.Adam(
-		list(policy_net.parameters()) + list(value_net.parameters()), 
-		lr=5e-5
-	)
-	#policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=1e-4)  # Taux d'apprentissage de 0.001
-	#value_optimizer = torch.optim.Adam(value_net.parameters(), lr=1e-4)      # Taux d'apprentissage de 0.001
-	scheduler = torch.optim.lr_scheduler.StepLR(policy_optimizer, step_size=1000, gamma=0.9)
+	policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=0.001)  # Taux d'apprentissage de 0.001
+	value_optimizer = torch.optim.Adam(value_net.parameters(), lr=0.001)      # Taux d'apprentissage de 0.001
+
 	
 	time_tot = 0
 	MAX_EPISODE = 200
 	total_loss_ep = 0
 
-	MAX_EPISODE_T = time.perf_counter() + 10 * 60
+	MAX_EPISODE_T = time.perf_counter() + 5 * 60
 	episode = 0
 
 	index = 0
 
-	reward_history = []
-	all_losses = []
 	while time.perf_counter() < MAX_EPISODE_T:
 		start_time = time.perf_counter()
 		
@@ -4015,36 +3909,33 @@ def TrainPPO():
 			state_tab.append(state_tensor.clone())  # sauvegarder l��tat (clone pour �viter pointer sur la m�me m�moire)
 
 			won = -2
-			#now = time.perf_counter()
-			#progress = now / MAX_EPISODE_T
-			#p_mcts = get_mcts_probability(now, MAX_EPISODE_T)
+			now = time.perf_counter()
+			progress = now / MAX_EPISODE_T
+			p_mcts = get_mcts_probability(now, MAX_EPISODE_T)
 
 			if (I % 10) < 9:
 				#won = game.PlayX10Terr(ind)
-				#if (I % 2) == 0:
 				won = game.PlayX10TerrMCTS(ind)
-				#else:
-				#	won = game.PlayX10Terr(ind)
 				
-			else:
+			elif (I % 10) == 9:
 				won = game.PlayX10TerrNN_vs_MCTS(ind, policy_net_old)
 			#elif (I % 4) == 2:
 		#		won = game.PlayX10TerrMCTSAH(ind, policy_net_old)
 			#else:
 			#	won = game.PlayX_NN10AH5(policy_net_old, ind)
 
+			game.remove_wet_players()
+
 			reward = []
 			if ind == 1:
 				reward = compute_reward_from_players(game, complete_team(game.red, "red"), complete_team(game.blue, "blue"), game.reward)
 			else:
-				reward = compute_reward_from_players(game, complete_team(game.blue, "blue"), complete_team(game.red, "red"), game.reward2)
+				reward = compute_reward_from_players(game, complete_team(game.blue, "blue"), complete_team(game.red, "red"), game.reward)
 			#reward2 = compute_reward_from_players(game, complete_team(game.blue, "blue"), complete_team(game.red, "red"), game.reward2)
 			combined_reward = reward #torch.cat([reward, reward2])  # shape (5,)
 
 			action.append(game.action.copy())    # liste d�actions (5 joueurs)
 			rewards.append(combined_reward.tolist())    # liste de rewards (5 joueurs)
-
-			game.remove_wet_players()
 
 			# Obtenir la sortie du r�seau de valeur (valeurs par joueur)
 			value_net.eval()
@@ -4089,10 +3980,6 @@ def TrainPPO():
 				if state_batch.size(0) <= 1:
 					continue
 
-				mean_reward_per_agent = reward_batch.mean(dim=0)
-				#print("Mean reward per agent:", mean_reward_per_agent.cpu().numpy())
-				reward_history.append(mean_reward_per_agent.cpu().numpy())
-
 				# Les tenseurs sont d�j� en format tensor gr�ce � CustomDataset
 				# Aucune conversion suppl�mentaire n'est n�cessaire ici
 
@@ -4104,6 +3991,8 @@ def TrainPPO():
 				##print(action_batch.shape)     # Devrait �tre [batch_size]
 				##print(action_batch)
 
+				action_logits_old = 0
+				action_probs_old = 0
 				with torch.no_grad():
 					action_logits_old = policy_net_old(state_batch)
 					action_probs_old = F.softmax(action_logits_old, dim=-1)
@@ -4119,88 +4008,68 @@ def TrainPPO():
 				action_probs_taken = action_probs[batch_indices, agent_indices, action_batch]
 				action_probs_old_taken = action_probs_old[batch_indices, agent_indices, action_batch]
 
-				#print("action_prob=", action_probs)
-				#print("action_prob old=", action_probs_old)
 
 				# Calculer r_t
-				#log_ratio = action_probs_taken - action_probs_old_taken
-				#print(log_ratio)
-				#rt = torch.exp(log_ratio)
-				#rt = torch.clamp(rt, min=0, max=1.5)  # éviter valeurs trop petites ou trop grandes
-				#action_probs_old_taken = torch.clamp(action_probs_old_taken, min=1e-8)
-				#print("old_prob=", action_probs_old_taken)
-				rt = action_probs_taken / action_probs_old_taken
+				rt = action_probs_taken / (action_probs_old_taken + 1e-10)
+													
+				
+				clipping_ratio = 0.2
+				# Calculer rtc avec les conditions de clipping
+				rtc = torch.clamp(rt, 1 - clipping_ratio, 1 + clipping_ratio)
 
-				clipping_ratio = 0.1
-				rt_clipped = torch.clamp(rt, 1 - clipping_ratio, 1 + clipping_ratio)
+				adv_batch = adv_batch.clone().detach().requires_grad_(True)
+				# Calculer la loss
+				# Calculer LCLIP
+				
+				LCLIP = -torch.mean(torch.min(rt * adv_batch, rtc * adv_batch)) 
 
-				# Normalisation des avantages
-				adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8)
-				adv_batch = adv_batch.detach()
-				#adv_batch = (adv_batch - adv_batch.min()) / (adv_batch.max() - adv_batch.min() + 1e-8)
+				# Obtenir la sortie de la valeur
+				value_output = value_net(state_batch)
 
-				#adv_batch = torch.clamp(adv_batch, -1, 1)
+				# Supposer que target_value est d�j� calcul� (ou l'utiliser � partir de votre logique)
+				target_value = reward_batch  # Remplacer par votre logique pour obtenir la valeur cible
 
-				# Calcul PPO clipped objective
-				LCLIP = -torch.mean(torch.min(rt * adv_batch, rt_clipped * adv_batch))
+				# Calculer la perte MSE pour la valeur
+				loss_value = F.mse_loss(value_output, target_value)  
 
-				# Calcul de la valeur prédite
-				value_output = value_net(state_batch).squeeze(-1)
-				target_value = reward_batch.detach()
+				# Calcul de l'entropie
+				entropy = -torch.sum(action_probs * torch.log(action_probs + 1e-10), dim=1).mean()
 
-				# Perte valeur (MSE)
-				loss_value = F.mse_loss(value_output, target_value)
+				# Coefficient pour ajuster l'importance de l'entropie dans la perte totale
+				entropy_coefficient = 0.01  # Ajuste cette valeur en fonction de tes besoins
 
-				# Entropie pour exploration
-				#eaction_probs = F.softmax(action_logits, dim=-1)
-				entropy = -(action_probs * torch.log(action_probs + 1e-10)).sum(dim=-1).mean()
 
-				entropy_coefficient = 0.01
-				value_loss_coef = 0.5
+				loss = LCLIP - entropy_coefficient * entropy
 
-				# Perte totale combinée
-				total_loss_batch = LCLIP + value_loss_coef * loss_value - entropy_coefficient * entropy
+				ltot = LCLIP + 0.5*loss_value - entropy_coefficient * entropy 
 
+				value_optimizer.zero_grad()
+				loss_value.backward(retain_graph=True)
+				value_optimizer.step()
+
+				# R�tropropagation de l'erreur
+				policy_optimizer.zero_grad()  # R�initialiser les gradients
+				loss.backward()        # Calculer les gradients
+				policy_optimizer.step()       # Mettre � jour les poids
 				
 
-				# Backpropagation unique
-				policy_optimizer.zero_grad()
-				total_loss_batch.backward()
-				torch.nn.utils.clip_grad_norm_(
-					list(policy_net.parameters()) + list(value_net.parameters()), 
-					0.5
-				)
-				policy_optimizer.step()
-				scheduler.step()
-
-								
-								
-				total_loss += total_loss_batch.item()
+				##print(f'Loss: {loss.item()}')  # Affiche la perte pour le batch actuel
+				total_loss += ltot.item()
 				batch_count += 1
 
-				#print(f"log_ratio min/max: {log_ratio.min().item():.3f}/{log_ratio.max().item():.3f}")
-				#print(f"rt min/max: {rt.min().item():.3f}/{rt.max().item():.3f}")
-				#print(f"adv_batch min/max: {adv_batch.min().item():.3f}/{adv_batch.max().item():.3f}")
-				#print("ADV mean/std", adv_batch.mean().item(), adv_batch.std().item())
-				#print("RT min/max", rt.min().item(), rt.max().item())
-				#print("Value output min/max", value_output.min().item(), value_output.max().item())
-				#print("Loss LCLIP:", LCLIP.item(), "Loss value:", loss_value.item())
+				print("ADV mean/std", adv_batch.mean().item(), adv_batch.std().item())
+				print("RT min/max", rt.min().item(), rt.max().item())
+				print("Value output min/max", value_output.min().item(), value_output.max().item())
+				print("Loss LCLIP:", LCLIP.item(), "Loss value:", loss_value.item())
 
 
-		
-
+		policy_net_old.load_state_dict(policy_net.state_dict())
 		average_loss = total_loss / batch_count if batch_count > 0 else 0.0
-		all_losses.append(average_loss)
 		total_loss_ep += average_loss
 		avg_tot_loss_ep = total_loss_ep / (episode+1)
 		#if ((episode+1) % 10 == 0):
 		print(f'episode={episode} Loss: {average_loss}/{avg_tot_loss_ep}')
 		episode += 1
-
-		#update old
-		if episode % 5 == 0:
-			policy_net_old.load_state_dict(policy_net.state_dict())
-			policy_net_old.eval()
 
 		# Fin du chronom�trage
 		end_time = time.perf_counter()
@@ -4221,24 +4090,6 @@ def TrainPPO():
 	torch.save({
 		'model_state_dict': policy_net.state_dict()
 	}, 'checkpoint6uslim.pth')
-
-	reward_history = np.array(reward_history)
-
-	for i in range(reward_history.shape[1]):
-		plt.plot(reward_history[:, i], label=f"Agent {i}")
-
-	plt.xlabel("Simulation step")
-	plt.ylabel("Mean reward")
-	plt.legend()
-	plt.title("Rewards per agent")
-	plt.show()
-
-	plt.plot(all_losses)
-	plt.xlabel("Episode")
-	plt.ylabel("Average Loss")
-	plt.title("Évolution de la perte moyenne")
-	plt.grid(True)
-	plt.show()
 #------------------END ENCODING NN -------------------------
 
 
@@ -4283,7 +4134,7 @@ def draw_grid(grid, left_players, right_players):
 			pygame.draw.circle(screen, (255, 255, 0), target_center, CELL_SIZE // 6)
 
 
-TRAIN_PPO = False
+TRAIN_PPO = True
 PLAY_NN =  True
 PLAY_MCTS = False
 
@@ -4373,7 +4224,7 @@ else:
 
 			pygame.display.flip()
 			clock.tick(60)
-			#time.sleep(0.1)
+			time.sleep(0.1)
 
 		# Annoncer le gagnant
 		if won == 1:
@@ -4384,6 +4235,6 @@ else:
 			print(f" Unexpected winner: {won}")
 
 		# Petite pause avant la prochaine partie
-		#time.sleep(2)
+		time.sleep(2)
 
 pygame.quit()
