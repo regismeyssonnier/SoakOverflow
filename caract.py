@@ -4,9 +4,9 @@ import torch
 # Charger le checkpoint
 checkpoint = torch.load('checkpoint6uslim.pth', map_location='cpu')
 
-# Extraire le dictionnaire d'état
+# Extraire le dictionnaire d'ï¿½tat
 state_dict = checkpoint['model_state_dict']
 
-# Afficher les caractéristiques de chaque paramètre
+# Afficher les caractï¿½ristiques de chaque paramï¿½tre
 for key, tensor in state_dict.items():
     print(f"{key}: shape={tuple(tensor.shape)}, dtype={tensor.dtype}")

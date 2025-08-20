@@ -4,7 +4,9 @@ import random
 import time
 import math
 import numpy as np
+import torch
 from torch.utils.data import DataLoader, Dataset
+import torch.optim as optim
 import time
 from datetime import timedelta
 from conv2d import *
@@ -21,7 +23,6 @@ BLACK = (0, 0, 0)
 CELL_SIZE = 40
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
 def decode_unicode_string_to_weights(unicode_str, offset=12.0, divider=2048.0, shape=None):
 	# Étape 1 : reconstruire la chaîne binaire 'weights_bytes' comme en C++ wstring -> string
@@ -509,6 +510,7 @@ class Game:
 		self.reward = 0
 		self.reward2 = 0
 		self.action = []
+		self.actionag = 0
 		self.graph = Graph(self.grid)
 
 	def Clone(self):
@@ -604,6 +606,7 @@ class Game:
 		bn_layer.running_mean = np.zeros((1, C, 1, 1))
 		bn_layer.running_var = np.ones((1, C, 1, 1))
 		
+
 
 	def init_NNUSNW(self):
 		self.nnz = PolicyNet_Numpy()
@@ -1543,7 +1546,7 @@ class Game:
 
 		return -2
 
-	def PlayX10TerrNN_vs_MCTS(self, ind, policy):
+	def PlayX10TerrNN_vs_MCTS(self, ind, agent):
 
 		ARG_MAX = False
 
@@ -1561,29 +1564,27 @@ class Game:
 		player = self.red if ind == 1 else self.blue
 		player2 = self.blue if ind == 1 else self.red
 		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
-		policy.eval()
+		
+		actionag = 0
 
-		for _ in range(5):
+		for _ in range(1):
 			with torch.no_grad():
-				state_tensor = encode_ALL_RL(self.grid, player, player2, self)  # shape (canaux, H, W)
-				# Pour le batch, on ajoute une dimension (batch=1)
-				state_tensor_batch = state_tensor.unsqueeze(0)
-				logits = policy(state_tensor_batch)  # (1, num_players=5, num_actions=5)
-				logits = logits.squeeze(0)  # (5, 5) pour chaque joueur
-				probs = F.softmax(logits, dim=-1)  # (5, 5)
+				state_tensor = encode_ALL_RL(self.grid, player, player2, self)  # (93, 10, 20)
+				input_tensor = state_tensor.to(dtype=torch.float32, device=device)  # (93, 10, 20)
+				actionag = agent.select_action(input_tensor)  # select_action ajoute le batch
+				actionag = actionag + np.random.normal(0, 0.3, size=25)  # exploration bruit gaussien
+				actionag = np.clip(actionag, -agent.max_action, agent.max_action)
 
-				if random.random() < 0.5:
-					actions = torch.argmax(logits, dim=1)  # (5,)
-					actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
-					ACTION.append(actions_list)
-				else:
-					
-					actions = torch.multinomial(probs, num_samples=1).squeeze(1)
-					
-					# Si tu veux en liste
-					actions_list = actions.tolist()
-					ACTION.append(actions_list)
+				# reshape en (5 joueurs, 5 actions)
+				actionag2 = actionag.reshape(5, 5)
 
+				action_indices = np.argmax(actionag2, axis=1)  # shape = (5,)
+
+				ACTION = action_indices
+
+				
+				# stocker pour debug / replay
+				self.actionag = actionag
 
 				##print("Actions pr�dites par joueur :", actions_list)
 				
@@ -1594,19 +1595,19 @@ class Game:
 			for i, p in enumerate(self.red):
 				best_action = -1
 				best_mv = Coord(-1, -1)
-				for _ in range(5):
-					if ACTION[_][i] == 4:
+				for _ in range(1):
+					if ACTION[i] == 4:
 						continue
 					origin = Coord(p.coord.x, p.coord.y)
-					mv = origin.add(directions[actions_list[i]])
+					mv = origin.add(directions[ACTION[i]])
 					cell = self.grid.get(mv.x, mv.y)
 					t = cell.get_type()
 					if t != Tile.TYPE_FLOOR: continue
 					if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
 						best_mv = mv
-						best_action = ACTION[_][i]
+						best_action = ACTION[i]
 						break
-				if best_action != 4:
+				if best_action != 4 or best_action != -1:
 					p.move(best_mv)
 				self.action.append(best_action)
 
@@ -1658,19 +1659,19 @@ class Game:
 			for i, p in enumerate(self.blue):
 				best_action = -1
 				best_mv = Coord(-1, -1)
-				for _ in range(5):
-					if ACTION[_][i] == 4:
+				for _ in range(1):
+					if ACTION[i] == 4:
 						continue
 					origin = Coord(p.coord.x, p.coord.y)
-					mv = origin.add(directions[actions_list[i]])
+					mv = origin.add(directions[ACTION[i]])
 					cell = self.grid.get(mv.x, mv.y)
 					t = cell.get_type()
 					if t != Tile.TYPE_FLOOR: continue
 					if mv not in occupied and mv.x >= 0 and mv.x < self.grid.width and mv.y >= 0 and mv.y < self.grid.height:
 						best_mv = mv
-						best_action = ACTION[_][i]
+						best_action = ACTION[i]
 						break
-				if best_action != 4:
+				if best_action != 4 or best_action != -1:
 					p.move(best_mv)
 				action2.append(best_action)
 		
@@ -1725,7 +1726,7 @@ class Game:
 			action2 += [4] * 5
 
 		if ind == 2:self.action = action2
-		
+					
 		#self.action.extend(action2)
 		#print(self.action)
 		
@@ -1792,19 +1793,19 @@ class Game:
 		if abs(score) >= 600:
 			if score > 0:
 				
-				return 1, probs
+				return 1
 			elif score < 0:
 				
-				return -1, probs
+				return -1
 		
 		if len(self.red) == 0:
 			
-			return -1, probs
+			return -1
 		if len(self.blue) == 0:
 			
-			return 1, probs
+			return 1
 
-		return -2, probs
+		return -2
 
 	def PlayX_NN(self, ind=1):
 
@@ -2111,29 +2112,24 @@ class Game:
 
 		
 		# state_tensor_batch shape: (1, 83, 20, 10) par exemple
-		self.nnz.eval()
 		with torch.no_grad():
 			player = self.red if ind == 1 else self.blue
 			player2 = self.blue if ind == 1 else self.red
 			state_tensor = encode_ALL_RL_numpy(self.grid, player, player2, self)  # (canaux, H, W)
-
+			#print(state_tensor)
 			# Ajouter une dimension batch au début : shape devient (1, canaux, H, W)
 			state_tensor_batch = np.expand_dims(state_tensor, axis=0)
 
 			# Passage dans le réseau numpy
 			logits = self.nnz.forward(state_tensor_batch)  # shape (1, num_players, num_actions)
+			logits_np = np.squeeze(logits, axis=0)                     
+			#print(logits_np.shape)  # doit être (25,)
+			# Convertir en numpy et reshape en (5 joueurs, 5 actions)
+			logits_np = logits.reshape(5, 5)
 
-			# Supprimer la dimension batch pour avoir (num_players, num_actions)
-			logits = np.squeeze(logits, axis=0)
-
-
-			if ARG_MAX:
-				actions = np.argmax(logits, axis=1)
-				actions_list = actions.tolist()  # liste d'actions [a0, a1, ..., a4]
-			else:
-				probs = softmax(logits, axis=-1)
-				actions = multinomial_numpy(probs)
-				actions_list = actions.tolist()
+			# Prendre l'action avec le max pour chaque joueur
+			action_indices = np.argmax(logits_np, axis=1)  # (5,)
+			actions_list = action_indices.tolist()
 
 			print("Actions pr�dites par joueur :", actions_list)
 
@@ -3180,6 +3176,138 @@ def spawn(grid):
 #-------------------ENCODING NN ----------------------------
 import torch
 
+def encode_playersTALLNumpy(players, players2, grid, grid_height, grid_width, game):
+
+	tensor = np.zeros((9, grid_height, grid_width), dtype=np.float32)
+
+	player_a = []
+	index = 0
+	if len(players) == 0:
+		return tensor
+
+	while 1:
+		for p in players:
+			player_a.append(p)
+			index += 1
+			if index == 5:break
+		if index == 5:break
+
+	player_a2 = []
+	index = 0
+
+	while 1:
+		for p in players2:
+			player_a2.append(p)
+			index += 1
+			if index == 5:break
+		if index == 5:break
+
+	player_a.extend(players2)
+
+	index = 0
+	base = 0
+	for player in player_a:
+		x, y = player.coord.x, player.coord.y
+
+		# �vite les d�bordements hors grille
+		if  (0 <= x < grid_width and 0 <= y < grid_height):
+			
+			tensor[0, y, x] = player.cooldown / player.mx_cooldown  # cooldown norm.
+			tensor[1, y, x] = player.splash_bombs / 3.0              # max bombs = 3
+			tensor[2, y, x] = player.wetness / 100.0                 # si born� � 100 ?
+			tensor[3, y, x] = (player.optimalRange - 5) / 5.0        # de 5 � 10
+			tensor[4, y, x] = (player.soakingPower - 10) / 15.0      # de 10 � 25
+
+			if index < 5:
+				tensor[5, y, x] = 1.0  # canal red
+	
+			tensor[6, y, x] = player.dead
+			score = game.rscore if players[0].team == 'red' else game.bscore
+			tensor[7, y, x] = score / 1500.0
+			
+		index += 1
+	
+	for y in range(10):
+		for x in range(20):
+			cell = grid.get(x, y)
+			t = cell.get_type()
+			if t == Tile.TYPE_FLOOR:
+				tensor[8, y, x] = 0.25
+			elif t == Tile.TYPE_LOW_COVER:
+				tensor[8, y, x] = 0.75
+			elif t == Tile.TYPE_HIGH_COVER:
+				tensor[8, y, x] = 1.0
+
+	return tensor  
+
+
+def encode_playersTALL(players, players2, grid, grid_height, grid_width, game):
+
+	tensor = torch.zeros((9, grid_height, grid_width), dtype=torch.float32)
+
+	player_a = []
+	index = 0
+	if len(players) == 0:
+		return tensor
+
+	while 1:
+		for p in players:
+			player_a.append(p)
+			index += 1
+			if index == 5:break
+		if index == 5:break
+
+	player_a2 = []
+	index = 0
+
+	while 1:
+		for p in players2:
+			player_a2.append(p)
+			index += 1
+			if index == 5:break
+		if index == 5:break
+
+	player_a.extend(players2)
+
+	index = 0
+	base = 0
+	for player in player_a:
+		x, y = player.coord.x, player.coord.y
+
+		# �vite les d�bordements hors grille
+		if  (0 <= x < grid_width and 0 <= y < grid_height):
+			
+			tensor[0, y, x] = player.cooldown / player.mx_cooldown  # cooldown norm.
+			tensor[1, y, x] = player.splash_bombs / 3.0              # max bombs = 3
+			tensor[2, y, x] = player.wetness / 100.0                 # si born� � 100 ?
+			tensor[3, y, x] = (player.optimalRange - 5) / 5.0        # de 5 � 10
+			tensor[4, y, x] = (player.soakingPower - 10) / 15.0      # de 10 � 25
+
+			if index < 5:
+				tensor[5, y, x] = 1.0  # canal red
+	
+
+			tensor[6, y, x] = player.dead
+			score = game.rscore if players[0].team == 'red' else game.bscore
+			tensor[7, y, x] = score / 1500.0
+
+		index += 1
+
+	
+	for y in range(10):
+		for x in range(20):
+			cell = grid.get(x, y)
+			t = cell.get_type()
+			if t == Tile.TYPE_FLOOR:
+				tensor[8, y, x] = 0.25
+			elif t == Tile.TYPE_LOW_COVER:
+				tensor[8, y, x] = 0.75
+			elif t == Tile.TYPE_HIGH_COVER:
+				tensor[8, y, x] = 1.0
+
+	return tensor  
+
+
 def encode_playersT(players, grid_height, grid_width, game):
 	# On utilise 7 canaux :
 	# cooldown, bombs, wetness, range, power, is_red, is_blue
@@ -3259,7 +3387,7 @@ def encode_grid(grid):
 
 	tensor = torch.zeros((3, 10, 20), dtype=torch.float32)
 
-	w, h = 10, 20
+	w, h = 20, 10
 	for y in range(h):
 		for x in range(w):
 			cell = grid.get(x, y)
@@ -3321,7 +3449,7 @@ def encode_players_numpy(players, grid_height, grid_width, game):
 def encode_grid_numpy(grid):
 	tensor = np.zeros((3, 10, 20), dtype=np.float32)
 
-	w, h = 10, 20
+	w, h = 20, 10
 	for y in range(h):
 		for x in range(w):
 			cell = grid.get(x, y)
@@ -3333,7 +3461,7 @@ def encode_grid_numpy(grid):
 			elif t == Tile.TYPE_HIGH_COVER:
 				tensor[2, y, x] = 1.0
 
-	return tensor  # shape : (3, 20, 10)
+	return tensor  # shape : (3, 10, 20)
 
 
 def create_dead_player(coord, team):
@@ -3371,33 +3499,42 @@ def encode_ALL_RL(grid, red, blue, game):
 	#red_complete = complete_team(red, "red", 5)
 	#blue_complete = complete_team(blue, "blue", 5)
 
-	tensor_red = encode_playersT(red, 10, 20, game)
-	tensor_blue = encode_playersT(blue, 10, 20, game)
-	tensor_grid = encode_grid(grid)
+	#tensor_red = encode_playersT(red, 10, 20, game)
+	#tensor_blue = encode_playersT(blue, 10, 20, game)
+	#tensor_grid = encode_grid(grid)
 
 	##print(tensor_red.shape)   # (channels_red, H, W)
 	##print(tensor_blue.shape)  # (channels_blue, H, W)
 	##print(tensor_grid.shape)  # (channels_grid, H, W)
 
-	input_tensor = torch.cat([
-		tensor_red,
-		tensor_blue, 
-		tensor_grid,
-	], dim=0)
+	#input_tensor = torch.cat([
+	#	tensor_red,
+	#	tensor_blue, 
+	#	tensor_grid,
+	#], dim=0)
+
+	input_tensor = encode_playersTALL(red, blue, grid, 10, 20, game)
+
+
+
 	return input_tensor
 
 import numpy as np
 
 def encode_ALL_RL_numpy(grid, red, blue, game):
-	red_complete = complete_team(red, "red", 5)
-	blue_complete = complete_team(blue, "blue", 5)
+	#red_complete = complete_team(red, "red", 5)
+	#blue_complete = complete_team(blue, "blue", 5)
 
-	tensor_red = encode_players_numpy(red_complete, 10, 20, game)   # (40, 20, 10)
-	tensor_blue = encode_players_numpy(blue_complete, 10, 20, game) # (40, 20, 10)
-	tensor_grid = encode_grid_numpy(grid)                     # (3, 20, 10)
+	#tensor_red = encode_players_numpy(red, 10, 20, game)   # (40, 20, 10)
+	#tensor_blue = encode_players_numpy(blue, 10, 20, game) # (40, 20, 10)
+	#tensor_grid = encode_grid_numpy(grid)                     # (3, 20, 10)
 
 	# concaténation sur l'axe des canaux (axis=0)
-	input_tensor = np.concatenate([tensor_red, tensor_blue, tensor_grid], axis=0) 
+	#input_tensor = np.concatenate([tensor_red, tensor_blue, tensor_grid], axis=0) 
+
+
+	input_tensor = encode_playersTALLNumpy(red, blue, grid, 10, 20, game)
+
 	return input_tensor  # shape: (40+40+3=83, 20, 10)
 
 
@@ -3663,6 +3800,140 @@ class ValueNet(nn.Module):
 		return self.fc2(x)
 
 
+
+
+# -------------------
+# Réseaux Actor & Critic (CNN version pour DDPG)
+# -------------------
+class Actor(nn.Module):
+	def __init__(self, state_channels=9, action_dim=25, max_action=1.0):
+		super().__init__()
+		self.conv1 = nn.Conv2d(state_channels, 16, 3, padding=1)
+		self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+		self.conv3 = nn.Conv2d(32, 32, 3, padding=1)
+		self.pool = nn.AdaptiveAvgPool2d(1)
+
+		self.fc1 = nn.Linear(32, 128)
+		self.fc2 = nn.Linear(128, 128)
+		self.fc3 = nn.Linear(128, action_dim)
+
+		self.activation = nn.ReLU()  # ou nn.Tanh() si tu préfères
+		self.max_action = max_action
+
+	def forward(self, x):
+		x = self.activation(self.conv1(x))
+		x = self.activation(self.conv2(x))
+		x = self.activation(self.conv3(x))
+		x = self.pool(x).view(x.size(0), -1)
+
+		x = self.activation(self.fc1(x))
+		x = self.activation(self.fc2(x))
+		return self.max_action * torch.tanh(self.fc3(x))
+
+
+
+class Critic(nn.Module):
+	def __init__(self, state_channels=9, action_dim=25):
+		super().__init__()
+		self.conv1 = nn.Conv2d(state_channels, 16, 3, padding=1)
+		self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+		self.conv3 = nn.Conv2d(32, 32, 3, padding=1)
+		self.pool = nn.AdaptiveAvgPool2d(1)
+
+		self.fc1 = nn.Linear(32 + action_dim, 128)
+		self.fc2 = nn.Linear(128, 128)
+		self.fc3 = nn.Linear(128, 1)
+
+		self.relu = nn.ReLU()
+
+	def forward(self, state, action):
+		x = self.relu(self.conv1(state))
+		x = self.relu(self.conv2(x))
+		x = self.relu(self.conv3(x))
+		x = self.pool(x).view(x.size(0), -1)
+
+		x = torch.cat([x, action], dim=1)
+		x = torch.relu(self.fc1(x))
+		x = torch.relu(self.fc2(x))
+		return self.fc3(x)
+
+
+# -------------------
+# Agent DDPG
+# -------------------
+class DDPG:
+	def __init__(self, state_channels, action_dim, max_action=1.0):
+		self.actor = Actor(state_channels, action_dim, max_action).to(device)
+		self.actor_target = Actor(state_channels, action_dim, max_action).to(device)
+		self.actor_target.load_state_dict(self.actor.state_dict())
+
+		self.critic = Critic(state_channels, action_dim).to(device)
+		self.critic_target = Critic(state_channels, action_dim).to(device)
+		self.critic_target.load_state_dict(self.critic.state_dict())
+
+		self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-4)
+		self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-3)
+
+		self.max_action = max_action
+		self.replay_buffer = deque(maxlen=100000)
+		self.actor_loss = 0
+		self.total_actor_loss = []
+
+	def select_action(self, state):
+		state = torch.as_tensor(state, dtype=torch.float32, device=device)  # (1, C, H, W)
+		if state.ndim == 3:   # (C, H, W)
+			state = state.unsqueeze(0)  # -> (1, C, H, W)
+		return self.actor(state).cpu().data.numpy().flatten()
+
+	def train(self, batch_size=64, gamma=0.99, tau=0.005):
+		if len(self.replay_buffer) < batch_size:
+			return
+
+		batch = random.sample(self.replay_buffer, batch_size)
+		state, action, reward, next_state, done = map(np.stack, zip(*batch))
+
+		# Conversion en tenseurs PyTorch
+		state = torch.FloatTensor(state).to(device)            # [B, C, H, W]
+		action = torch.FloatTensor(action).to(device)          # [B, action_dim]
+		reward = torch.FloatTensor(reward).mean(axis=1, keepdim=True).to(device)  # [B,1]
+		next_state = torch.FloatTensor(next_state).to(device)  # [B, C, H, W]
+		done = torch.FloatTensor(done).unsqueeze(1).to(device) # [B,1]
+
+
+		# Critic update
+		with torch.no_grad():
+			next_action = self.actor_target(next_state)
+			target_Q = self.critic_target(next_state, next_action)
+			target_Q = reward + (1 - done) * gamma * target_Q
+
+		print(next_action.shape)  # devrait être [batch_size, 25]
+		print(target_Q.shape)     # devrait être [batch_size, 1]
+		print(reward.shape)       # [batch_size, 1]
+
+		#target_Q = target_Q.mean(dim=1)
+		current_Q = self.critic(state, action)
+		critic_loss = nn.MSELoss()(current_Q, target_Q)
+
+		self.critic_optimizer.zero_grad()
+		critic_loss.backward()
+		self.critic_optimizer.step()
+
+		# Actor update
+		actor_loss = -self.critic(state, self.actor(state)).mean()
+		self.actor_optimizer.zero_grad()
+		actor_loss.backward()
+		self.actor_optimizer.step()
+
+		self.actor_loss += actor_loss.item()
+
+		# Soft update des cibles
+		for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+			target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+
+		for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+			target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+
+
 import torch
 
 def compute_reward_from_playersDR(game, players: list[Player], players2: list[Player], score_territory):
@@ -3899,144 +4170,139 @@ def safe_normalize(tensor):
 
 
 def compute_reward_from_playersDE(game, players: list[Player], players2: list[Player], score_territory):
-    N = len(players)
+	N = len(players)
 
-    if N == 0:
-        return torch.zeros(5, dtype=torch.float)
+	if N == 0:
+		return torch.zeros(5, dtype=torch.float)
 
-    # Score brut de territoire
-    scores = torch.full((N,), score_territory, dtype=torch.float)
+	# Score brut de territoire
+	scores = torch.full((N,), score_territory, dtype=torch.float)
 
-    # Positions des joueurs
-    pos1 = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)  # shape (N, 2)
-    pos2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)  # shape (M, 2)
-    dead2 = torch.tensor([p.dead for p in players2], dtype=torch.bool)  # shape (M,)
+	# Positions des joueurs
+	pos1 = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)  # shape (N, 2)
+	pos2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)  # shape (M, 2)
+	dead2 = torch.tensor([p.dead for p in players2], dtype=torch.bool)  # shape (M,)
 
-    if dead2.all():
-        reward_norm = torch.ones(N, dtype=torch.float) * 0.95
-    else:
-        diffs = pos1[:, None, :] - pos2[None, :, :]  # (N, M, 2)
-        dists = torch.sum(torch.abs(diffs), dim=2)   # (N, M)
-        dists[:, dead2] = float('inf')
+	if dead2.all():
+		reward_norm = torch.ones(N, dtype=torch.float) * 0.95
+	else:
+		diffs = pos1[:, None, :] - pos2[None, :, :]  # (N, M, 2)
+		dists = torch.sum(torch.abs(diffs), dim=2)   # (N, M)
+		dists[:, dead2] = float('inf')
 
-        min_dists, closest_enemy_idx = torch.min(dists, dim=1)  # (N,)
-        closest_enemy_pos = pos2[closest_enemy_idx]             # (N, 2)
-        vec_to_enemy = closest_enemy_pos - pos1                 # (N, 2)
+		min_dists, closest_enemy_idx = torch.min(dists, dim=1)  # (N,)
+		closest_enemy_pos = pos2[closest_enemy_idx]             # (N, 2)
+		vec_to_enemy = closest_enemy_pos - pos1                 # (N, 2)
 
-        inv_dists = 40.0 - (min_dists + 1e-6)
+		inv_dists = 40.0 - (min_dists + 1e-6)
 
-        team_color = players[0].team
-        best_pos, _ = find_best_spot_numpy_general(game, team_color)
-        best_pos_tensor = torch.tensor([best_pos], dtype=torch.float)  # (1, 2)
+		team_color = players[0].team
+		best_pos, _ = find_best_spot_numpy_general(game, team_color)
+		best_pos_tensor = torch.tensor([best_pos], dtype=torch.float)  # (1, 2)
 
-        dists_best = torch.sum(torch.abs(pos1 - best_pos_tensor), dim=1)  # (N,)
-        proximity_to_closest = 40 - (dists_best + 1e-6)
+		dists_best = torch.sum(torch.abs(pos1 - best_pos_tensor), dim=1)  # (N,)
+		proximity_to_closest = 40 - (dists_best + 1e-6)
 
-        scores_norm = scores / 200.0
+		scores_norm = scores / 200.0
 
-        reward = (
-            (proximity_to_closest / 40.0) * 0.6 +
-            (scores_norm / 200.0) * 0.3 +
-            (inv_dists / 40.0) * 0.1
-        )
-        reward_norm = reward * 0.95  # (N,)
+		reward = (
+			(proximity_to_closest / 40.0) * 0.6 +
+			(scores_norm / 200.0) * 0.3 +
+			(inv_dists / 40.0) * 0.1
+		)
+		reward_norm = reward * 0.95  # (N,)
 
-    # Étendre à 5 joueurs en dupliquant les valeurs si besoin
-    reward_list = reward_norm.tolist()
-    while len(reward_list) < 5:
-        reward_list.append(reward_list[len(reward_list) % N])
+	# Étendre à 5 joueurs en dupliquant les valeurs si besoin
+	reward_list = reward_norm.tolist()
+	while len(reward_list) < 5:
+		reward_list.append(reward_list[len(reward_list) % N])
 
-    reward_tensor = torch.tensor(reward_list, dtype=torch.float)
+	reward_tensor = torch.tensor(reward_list, dtype=torch.float)
 
-    # Appliquer pénalité (reward = 0) pour les joueurs morts ou très mouillés
-    for idx, p in enumerate(players):
-        if p.wetness >= 100 or p.dead == 1.0:
-            reward_tensor[idx] = 0.0
+	# Appliquer pénalité (reward = 0) pour les joueurs morts ou très mouillés
+	for idx, p in enumerate(players):
+		if p.wetness >= 100 or p.dead == 1.0:
+			reward_tensor[idx] = 0.0
 
-    return reward_tensor
+	return reward_tensor
 
 def compute_reward_from_players(game, players: list[Player], players2: list[Player], score_territory):
-    N = len(players)
-
-    if N == 0:
-        return torch.zeros(5, dtype=torch.float)
-
-    # Score brut de territoire
-    scores = torch.full((N,), score_territory, dtype=torch.float)
-
-    # Positions des joueurs
-    pos1 = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)  # (N, 2)
-    pos2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)  # (M, 2)
-    dead2 = torch.tensor([p.dead for p in players2], dtype=torch.bool)  # (M,)
-
-    if dead2.all():
-        reward_norm = torch.ones(N, dtype=torch.float) * 0.95
-    else:
-        # --- Nouveau : centre de masse des ennemis vivants ---
-        alive_enemy_pos = pos2[~dead2]
-        enemy_center = alive_enemy_pos.mean(dim=0)  # (2,)
-
-        # Distance de chaque joueur allié au centre des ennemis
-        dists_center = torch.sum(torch.abs(pos1 - enemy_center), dim=1)  # (N,)
-        inv_dists_center = 40.0 - (dists_center + 1e-6)
-
-        # Position optimale (existant)
-        team_color = players[0].team
-        best_pos, _ = find_best_spot_numpy_general(game, team_color)
-        best_pos_tensor = torch.tensor([best_pos], dtype=torch.float)  # (1, 2)
-
-        dists_best = torch.sum(torch.abs(pos1 - best_pos_tensor), dim=1)  # (N,)
-        proximity_to_closest = 40 - (dists_best + 1e-6)
-
-        # Normalisation du score
-        scores_norm = scores / 200.0
-
-        # Pondération de la récompense
-        reward = (
-            (proximity_to_closest / 40.0) * 0.1 +
-            (scores_norm / 200.0) * 0.3 +
-            (inv_dists_center / 40.0) * 0.6  # Utilise le centre ennemi
-        )
-        reward_norm = reward * 0.95
-
-    # Étendre à 5 joueurs en dupliquant si nécessaire
-    reward_list = reward_norm.tolist()
-    while len(reward_list) < 5:
-        reward_list.append(reward_list[len(reward_list) % N])
-
-    reward_tensor = torch.tensor(reward_list, dtype=torch.float)
-
-    # Pénalité pour joueurs morts ou mouillés
-    for idx, p in enumerate(players):
-        if p.wetness >= 100 or p.dead == 1.0:
-            reward_tensor[idx] = 0.0
-
-    return reward_tensor
-
-
-def compute_reward_from_players_red(players: list[Player], players2: list[Player], win):
 	N = len(players)
-	reward = []
+
+	if N == 0:
+		return torch.zeros(5, dtype=torch.float)
+
+	# Score brut de territoire
+	scores = torch.full((N,), score_territory, dtype=torch.float)
+
+	# Positions des joueurs
+	pos1 = torch.tensor([[p.coord.x, p.coord.y] for p in players], dtype=torch.float)  # (N, 2)
+	pos2 = torch.tensor([[p.coord.x, p.coord.y] for p in players2], dtype=torch.float)  # (M, 2)
+	dead2 = torch.tensor([p.dead for p in players2], dtype=torch.bool)  # (M,)
+
+	if dead2.all():
+		reward_norm = torch.ones(N, dtype=torch.float) * 0.95
+	else:
+		# --- Nouveau : centre de masse des ennemis vivants ---
+		alive_enemy_pos = pos2[~dead2]
+		enemy_center = alive_enemy_pos.mean(dim=0)  # (2,)
+
+		# Distance de chaque joueur allié au centre des ennemis
+		dists_center = torch.sum(torch.abs(pos1 - enemy_center), dim=1)  # (N,)
+		inv_dists_center = 40.0 - (dists_center + 1e-6)
+
+		# Position optimale (existant)
+		team_color = players[0].team
+		best_pos, _ = find_best_spot_numpy_general(game, team_color)
+		best_pos_tensor = torch.tensor([best_pos], dtype=torch.float)  # (1, 2)
+
+		dists_best = torch.sum(torch.abs(pos1 - best_pos_tensor), dim=1)  # (N,)
+		proximity_to_closest = 40 - (dists_best + 1e-6)
+
+		# Normalisation du score
+		scores_norm = scores / 200.0
+
+		# Pondération de la récompense
+		reward = (
+			(proximity_to_closest / 40.0) * 0.1 +
+			(scores_norm / 200.0) * 0.3 +
+			(inv_dists_center / 40.0) * 0.6  # Utilise le centre ennemi
+		)
+		reward_norm = reward * 0.95
+
+	# Étendre à 5 joueurs en dupliquant si nécessaire
+	reward_list = reward_norm.tolist()
+	while len(reward_list) < 5:
+		reward_list.append(reward_list[len(reward_list) % N])
+
+	reward_tensor = torch.tensor(reward_list, dtype=torch.float)
+
+	# Pénalité pour joueurs morts ou mouillés
+	for idx, p in enumerate(players):
+		if p.wetness >= 100 or p.dead == 1.0:
+			reward_tensor[idx] = 0.0
+
+	return reward_tensor
+
+
+def compute_reward_from_players_red(players, players2, win, num_players=5):
 	if win == 1:
-		reward = torch.full((N,), 1, dtype=torch.float)
+		val = 1.0
 	elif win == -1:
-		reward = torch.full((N,), -1, dtype=torch.float)
+		val = -1.0
 	else:
-		reward = torch.full((N,), 0, dtype=torch.float)
+		val = 0.0
+	return np.full(num_players, val, dtype=np.float32)
 
-	return reward
-
-def compute_reward_from_players_blue(players: list[Player], players2: list[Player], win):
-	N = len(players)
-	reward = []
+def compute_reward_from_players_blue(players, players2, win, num_players=5):
 	if win == -1:
-		reward = torch.full((N,), 1, dtype=torch.float)
+		val = 1.0
 	elif win == 1:
-		reward = torch.full((N,), -1, dtype=torch.float)
+		val = -1.0
 	else:
-		reward = torch.full((N,), 0, dtype=torch.float)
+		val = 0.0
+	return np.full(num_players, val, dtype=np.float32)
 
-	return reward
 
 
 
@@ -4059,9 +4325,9 @@ class MultiPlayerDataset(Dataset):
 
 		# Conversion s�curis�e pour actions (entiers)
 		if isinstance(actions[0], torch.Tensor):
-			self.actions = torch.stack(actions).long()
+			self.actions = torch.stack(actions).float32()
 		else:
-			self.actions = torch.tensor(actions, dtype=torch.long)
+			self.actions = torch.tensor(actions, dtype=torch.float32)
 
 		# Conversion s�curis�e pour values
 		if isinstance(values[0], torch.Tensor):
@@ -4435,7 +4701,95 @@ def TrainPPO():
 #------------------END ENCODING NN -------------------------
 
 
+def Train_DPG():
 
+	
+	state_dim = 9
+	action_dim = 25
+	max_action = 2.0
+
+	agent = DDPG(state_dim, action_dim, max_action)
+
+	episodes = 0
+	MAX_EPISODE_T = time.perf_counter() + 10 * 60
+	time_tot = 0
+
+	while time.perf_counter() < MAX_EPISODE_T:
+		start_time = time.perf_counter()
+
+		grid = GridMaker.init_grid(rng)
+		left_players, right_players = spawn(grid)
+		game = Game(grid, left_players, right_players)
+
+		ind = (episodes % 2) + 1
+		done = [0]
+		episode_reward = 0
+		count = 0
+		agent.actor_loss = 0
+		while True:
+			state = 0
+			if ind == 1:
+				state = encode_ALL_RL(grid, game.red, game.blue, game)  # shape (canaux, H, W)
+			else:
+				state = encode_ALL_RL(grid, game.blue, game.red, game)
+
+			won = game.PlayX10TerrNN_vs_MCTS(ind, agent)
+
+			if ind == 1:
+				reward = compute_reward_from_players_red(game.red, game.blue, won)
+				#reward = compute_reward_from_players(game, game.red, game.blue, game.reward, won)
+			else:
+				reward = compute_reward_from_players_blue(game.blue, game.red, won)
+				#reward = compute_reward_from_players(game, game.blue, game.red, game.reward2, won)
+
+			action = game.actionag
+
+			dones = 1.0 if won != -2 or count == 100 else 0.0
+
+			next_state = 0
+			if ind == 1:
+				next_state = encode_ALL_RL(grid, game.red, game.blue, game)  # shape (canaux, H, W)
+			else:
+				next_state = encode_ALL_RL(grid, game.blue, game.red, game)
+
+
+			agent.replay_buffer.append((state, action, reward, next_state, float(dones)))
+			episode_reward += reward.mean().item()
+
+			agent.train()
+
+			count += 1
+			if won != -2 or count == 100:
+				break
+
+		agent.total_actor_loss.append(agent.actor_loss/count)
+		print(f"Episode {episodes+1}, Reward: {(episode_reward/count):.2f} / {count}")
+		# Fin du chronomtrage
+		end_time = time.perf_counter()
+
+		episodes+=1
+
+		# Calculer la dure
+		execution_time = end_time - start_time
+		time_tot += execution_time
+		ftime_tot = str(timedelta(seconds=time_tot))
+		rem_time = MAX_EPISODE_T - end_time
+		rem_time_hms = str(timedelta(seconds=rem_time))
+
+		print(f"Temps d'execution : {execution_time:.2f}s/{ftime_tot}  temps restant={rem_time_hms}")
+
+
+
+	torch.save({
+		'model_state_dict': agent.actor.state_dict()
+	}, 'checkpoint6uslim.pth')
+
+	plt.plot(agent.total_actor_loss)
+	plt.xlabel("Episode")
+	plt.ylabel("Average Loss")
+	plt.title("Evolution de la perte moyenne")
+	plt.grid(True)
+	plt.show()
 
 
 def draw_grid(grid, left_players, right_players):
@@ -4482,7 +4836,7 @@ PLAY_MCTS = False
 
 if TRAIN_PPO:
 	rng = random.Random()
-	TrainPPO()
+	Train_DPG()
 
 else:
 	pygame.init()
@@ -4566,7 +4920,7 @@ else:
 
 			pygame.display.flip()
 			clock.tick(60)
-			#time.sleep(0.1)
+			time.sleep(0.1)
 
 		# Annoncer le gagnant
 		if won == 1:
@@ -4577,6 +4931,6 @@ else:
 			print(f" Unexpected winner: {won}")
 
 		# Petite pause avant la prochaine partie
-		#time.sleep(2)
+		time.sleep(2)
 
 pygame.quit()

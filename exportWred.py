@@ -113,7 +113,7 @@ if __name__ == "__main__":
 	# Remplace 'checkpoint6uslim.pth' par le chemin de ton checkpoint
 	export_torch_weights_to_unicode_python_file(
 		model_class=ConvDQN,
-		checkpoint_path='checkpoint6uslim_dqnone.pth',
-		output_py='weights_unicode.py',
+		checkpoint_path='checkpoint6uslim_dqnonered.pth',
+		output_py='weights_unicodered.py',
 		output_txt='weights_decompressed.txt'
 	)

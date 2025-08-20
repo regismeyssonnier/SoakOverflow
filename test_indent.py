@@ -1,0 +1,1 @@
+			policy_net_old.to(device)

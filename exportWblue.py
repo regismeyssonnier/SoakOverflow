@@ -72,8 +72,8 @@ def export_torch_weights_to_unicode_python_file(model_class, checkpoint_path,
 			safe_name = name.replace('.', '_')
 			shape_str = str(np_array.shape)
 
-			f.write(f"{safe_name}_shape = {shape_str}\n")
-			f.write(f"{safe_name} = '''{encoded_str}'''\n\n")
+			f.write(f"{safe_name}_shapeb = {shape_str}\n")
+			f.write(f"{safe_name}b = '''{encoded_str}'''\n\n")
 
 			decompressed = decode_unicode_string_to_weights(encoded_str, shape=np_array.shape)
 			decompressed_weights_dict[safe_name] = decompressed
@@ -113,7 +113,7 @@ if __name__ == "__main__":
 	# Remplace 'checkpoint6uslim.pth' par le chemin de ton checkpoint
 	export_torch_weights_to_unicode_python_file(
 		model_class=ConvDQN,
-		checkpoint_path='checkpoint6uslim_dqnone.pth',
-		output_py='weights_unicode.py',
+		checkpoint_path='checkpoint6uslim_dqnoneblue.pth',
+		output_py='weights_unicodeblue.py',
 		output_txt='weights_decompressed.txt'
 	)

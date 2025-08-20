@@ -261,17 +261,52 @@ class Linear:
 import numpy as np
 
 class PolicyNet_Numpy:
+    def __init__(self, state_channels=9, action_dim=5, max_action=2.0):
+        self.max_action = max_action
+        # Convs (in_channels, out_channels, kernel_size)
+        self.conv1 = Conv2D_Numpy(in_channels=state_channels, out_channels=8, kernel_size=3, padding='same')
+        self.conv2 = Conv2D_Numpy(in_channels=8, out_channels=16, kernel_size=3, padding='same')
+        self.conv3 = Conv2D_Numpy(in_channels=16, out_channels=16, kernel_size=3, padding='same')
+
+        # Fully connected
+        self.fc1 = Linear(in_features=16, out_features=64)
+        #self.fc2 = Linear(in_features=128, out_features=128)
+        self.fc2 = Linear(in_features=64, out_features=action_dim)
+
+    def relu(self, x):
+        return np.maximum(0, x)  # ReLU
+
+    def tanh(self, x):
+        return np.tanh(x)
+
+    def forward(self, x):
+        # x shape: (B, C, H, W)
+        x = self.relu(self.conv1.forward(x))
+        x = self.relu(self.conv2.forward(x))
+        x = self.relu(self.conv3.forward(x))
+
+        x = adaptive_avg_pool2d_numpy(x, output_size=1)  # shape: (B, 32, 1, 1)
+        x = x.reshape(x.shape[0], -1)                    # shape: (B, 32)
+
+        x = self.relu(self.fc1.forward(x))               # (B, 128)
+        #x = self.relu(self.fc2.forward(x))               # (B, 128)
+        x = self.fc2.forward(x)                          # (B, action_dim)
+
+        return x            # scale output like PyTorch Actor
+
+
+class PolicyNet_NumpyPPO:
     def __init__(self, num_players=5, num_actions=5):
         self.num_players = num_players
         self.num_actions = num_actions
 
-        self.conv1 = Conv2D_Numpy(in_channels=93, out_channels=8, kernel_size=3, padding='same')
-        self.conv2 = Conv2D_Numpy(in_channels=8, out_channels=16, kernel_size=3, padding='same')
-        self.conv3 = Conv2D_Numpy(in_channels=16, out_channels=16, kernel_size=3, padding='same')
+        self.conv1 = Conv2D_Numpy(in_channels=93, out_channels=16, kernel_size=3, padding='same')
+        self.conv2 = Conv2D_Numpy(in_channels=16, out_channels=32, kernel_size=3, padding='same')
+        self.conv3 = Conv2D_Numpy(in_channels=32, out_channels=32, kernel_size=3, padding='same')
 
-        self.fc1 = Linear(in_features=16, out_features=64)
-        self.fc2 = Linear(in_features=64, out_features=128)
-        self.fc3 = Linear(in_features=128, out_features=num_players * num_actions)
+        self.fc1 = Linear(in_features=32, out_features=128)
+        self.fc2 = Linear(in_features=128, out_features=128)
+        self.fc3 = Linear(in_features=128, out_features=num_actions)
 
     def relu(self, x):
         #return np.maximum(0, x)
@@ -361,7 +396,10 @@ def load_pytorch_weights_into_numpy_model(pytorch_path, numpy_model):
     copy_conv_weights(numpy_model.conv1, 'conv1')
     copy_conv_weights(numpy_model.conv2, 'conv2')
     copy_conv_weights(numpy_model.conv3, 'conv3')
-    copy_linear_weights(numpy_model.fc, 'fc')
+    # Fully connected
+    copy_linear_weights(numpy_model.fc1, 'fc1')
+    copy_linear_weights(numpy_model.fc2, 'fc2')
+    copy_linear_weights(numpy_model.fc3, 'fc3')
 
 import numpy as np
 

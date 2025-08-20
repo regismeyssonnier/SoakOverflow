@@ -325,8 +325,8 @@ class MCTS:
 			r = self.get_FloorScore(sim_game)
 						
 			score2 = 0
-			if indb == 'red' and r > 0:score = r / 100
-			if indb == 'blue' and r < 0:score = -r / 100
+			if indb == 'red' and r > 0:score2 = r / 100
+			if indb == 'blue' and r < 0:score2 = -r / 100
 
 			for idx, ag in enumerate(root):
 				
@@ -365,56 +365,62 @@ class MCTS:
 
 				# Calcul du "cover" : estimation de s�curit�
 				cover = 0
-				for j in range(4):
-					edx = agent.coord.x + dx[j]
-					edy = agent.coord.y + dy[j]
+				'''
+					for j in range(4):
+						edx = agent.coord.x + dx[j]
+						edy = agent.coord.y + dy[j]
 
-					if not (0 <= edx < sim_game.grid.width and 0 <= edy < sim_game.grid.height):
-						continue
+						if not (0 <= edx < sim_game.grid.width and 0 <= edy < sim_game.grid.height):
+							continue
 
-					cell = sim_game.grid.get(edx, edy)
-					t = cell.get_type()
+						cell = sim_game.grid.get(edx, edy)
+						t = cell.get_type()
 
-					if t > 0:
-						counta = 0
-						for a in opp_agent:
-							if ((agent.coord.x < edx and a.coord.x > edx) or
-								(agent.coord.x > edx and a.coord.x < edx) or
-								(agent.coord.y < edy and a.coord.y > edy) or
-								(agent.coord.y > edy and a.coord.y < edy)):
-								counta += 1
-						cover += t * counta
-
-				score3 = max(0.0, min(1.0, cover / 20.0))
+						if t > 0:
+							counta = 0
+							for a in opp_agent:
+								if ((agent.coord.x < edx and a.coord.x > edx) or
+									(agent.coord.x > edx and a.coord.x < edx) or
+									(agent.coord.y < edy and a.coord.y > edy) or
+									(agent.coord.y > edy and a.coord.y < edy)):
+									counta += 1
+							cover += t * counta
+				'''
+				score3 = 0# max(0.0, min(1.0, cover / 20.0))
 
 				# P�nalit� d'espacement : �vite que les agents soient trop proches
-				spacing_penalty = 0.0
-				my_agents_list = my_agent
-				for ii in range(len(my_agents_list)):
-					for jj in range(ii + 1, len(my_agents_list)):
-						a1, a2 = my_agents_list[ii], my_agents_list[jj]
-						dist = abs(a1.coord.x - a2.coord.x) + abs(a1.coord.y - a2.coord.y)
-						if dist < 2:
-							spacing_penalty += 0.1 * (2 - dist)
+				'''
+					spacing_penalty = 0.0
+					my_agents_list = my_agent
+					for ii in range(len(my_agents_list)):
+						for jj in range(ii + 1, len(my_agents_list)):
+							a1, a2 = my_agents_list[ii], my_agents_list[jj]
+							dist = abs(a1.coord.x - a2.coord.x) + abs(a1.coord.y - a2.coord.y)
+							if dist < 2:
+								spacing_penalty += 0.1 * (2 - dist)
 
-				score4 = max(0.0, min(1.0, 1.0 - spacing_penalty))
+				'''
+
+				score4 = 0; #max(0.0, min(1.0, 1.0 - spacing_penalty))
 
 				# Estimation des d�g�ts potentiels
+				'''
 				damage = 0.0
-				for oa in opp_agent:
-					dist_to_agent = sim_game.graph.distance[oa.coord.y * sim_game.grid.width + oa.coord.x][agent.coord.y * sim_game.grid.width + agent.coord.x]
-					if dist_to_agent <= oa.optimalRange and oa.cooldown == 0:
-						damage += oa.soakingPower
+					for oa in opp_agent:
+						dist_to_agent = sim_game.graph.distance[oa.coord.y * sim_game.grid.width + oa.coord.x][agent.coord.y * sim_game.grid.width + agent.coord.x]
+						if dist_to_agent <= oa.optimalRange and oa.cooldown == 0:
+							damage += oa.soakingPower
 
-				if agent.wetness > 0:
-					score5 = damage / (101.0 - float(agent.wetness))
-				else:
-					score5 = 1.0
-
+					if agent.wetness > 0:
+						score5 = damage / (101.0 - float(agent.wetness))
+					else:
+						score5 = 1.0
+				'''
 				
-				score5 = max(0.0, min(1.0, score5))
+				#score5 = max(0.0, min(1.0, score5))
 
-				scoref = (score2 * alpha + score * beta + score3 * omega + score4 * theta) - score5 * phi
+				scoref = score
+				#scoref = (score2 * alpha + score * beta + score3 * omega + score4 * theta) - score5 * phi
 				
 				self.backpropagation(node[idx], scoref)
 
