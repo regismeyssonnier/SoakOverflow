@@ -13,6 +13,9 @@ Run ./nnsoak.cpp
 After ./exportW.py to create the compressed weight to use.
 Look at the code to use different NN, and change.
 
+There is too other methods like DDPG, and DQN (file with suffix dqn, and dpg).
+The best is DQN, it runs same way like PPO file ("same variable name").
+
 ## 2. Training
 
 The file soakonlinenn.py is for using on codingame. You have to change the header code like  conv1_weight; etc... to change the weight NN.
