@@ -826,12 +826,12 @@ class Player:
 		self.coord = coord  # Un objet Coord
 		self.team = team    # "red" ou "blue"
 		self.last_coord = coord
-		self.mx_cooldown = random.randint(5, 7)
+		self.mx_cooldown = random.randint(1, 5)
 		self.cooldown = 0
 		self.splash_bombs = random.randint(0, 3)
 		self.wetness = 0   
-		self.optimalRange = random.randint(5, 10)
-		self.soakingPower = random.randint(10, 25)
+		self.optimalRange = random.randint(2, 8)
+		self.soakingPower = random.randint(8, 32)
 		self.score = 0
 		self.dead = 0
 		self.thx = -1
@@ -2122,17 +2122,17 @@ class Game:
 		self.Cooldown()
 		#self.remove_wet_players()
 
-		self.get_FloorScore()
+		r = self.get_FloorScore()
 
 		score = self.rscore - self.bscore
 
 		self.reward = 0
 		self.reward2 = 0
-		if score > 0:
-			self.reward = self.rscore + damage_b * damage_b
+		#if score > 0:
+		self.reward = self.rscore + r + damage_b * damage_b
 
-		if score < 0:
-			self.reward2 = self.bscore + damage_r * damage_r
+		#if score < 0:
+		self.reward2 = self.bscore - r + damage_r * damage_r - (damage_b * damage_b) / 2
 						
 		##print(f"Red Score: {self.rscore} | Blue Score: {self.bscore} | Diff: {self.rscore - self.bscore}")
 		#self.#print_wetness()
@@ -4458,18 +4458,18 @@ import torch.nn.functional as F
 # Hyperparamètres (ajuste si besoin)
 # -------------------------------------------------------
 NUM_ACTIONS   = 5      # ex: [haut, bas, gauche, droite, rien]
-STATE_CHANNELS= 9     # ex: 93
+STATE_CHANNELS= 11     # ex: 93
 HEIGHT, WIDTH = 10, 20
 BUFFER_SIZE   = 100_000
 BATCH_SIZE    = 64
 GAMMA         = 0.99
 LR            = 2.5e-4
 TARGET_UPDATE = 1000     # tous les N steps on copie vers le target (hard update)
-TAU           = 0.0       # si >0, on fait un soft update (Polyak). Laisse 0 si tu utilises TARGET_UPDATE
+TAU           = 0.005       # si >0, on fait un soft update (Polyak). Laisse 0 si tu utilises TARGET_UPDATE
 EPS_START     = 1.0
-EPS_END       = 0.05
-EPS_DECAY     = 20000     # plus c'est grand, plus epsilon décroît lentement
-GRAD_NORM_CLIP= 10.0
+EPS_END       = 0.1
+EPS_DECAY     = 15000     # plus c'est grand, plus epsilon décroît lentement
+GRAD_NORM_CLIP= 1.0
 DEVICE        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # -------------------------------------------------------
@@ -4580,6 +4580,7 @@ class DQNAgent:
 			# mettre -inf aux actions invalides
 			q_values[~mask] = -1e9
 
+		self.eps = EPS_END + (EPS_START - EPS_END) * math.exp(-1.0 * self.train_steps / EPS_DECAY)
 		# epsilon-greedy
 		if random.random() < self.eps:
 			if valid_actions is None:
@@ -4606,6 +4607,8 @@ class DQNAgent:
 		reward_batch     = torch.tensor(np.array(reward_batch), dtype=torch.float32, device=DEVICE)     # (B,)
 		done_batch       = torch.tensor(np.array(done_batch), dtype=torch.float32, device=DEVICE)       # (B,)
 
+		norm_reward_batch = (reward_batch - reward_batch.mean()) / (reward_batch.std() + 1e-8)
+
 		# --- Q(s,a) courant
 		q_values = self.q_net(state_batch)              # (B, NUM_ACTIONS)
 		q_sa = q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1)  # (B,)
@@ -4619,8 +4622,8 @@ class DQNAgent:
 			next_q = next_q_target.gather(1, next_actions).squeeze(1)  # (B,)
 
 			# --- Cible
-			target = reward_batch + (1.0 - done_batch) * GAMMA * next_q
-			target = 0.9 * target + 0.1 * q_sa.detach()  # smoothing (optionnel)
+			target = norm_reward_batch + (1.0 - done_batch) * GAMMA * next_q
+			#target = 0.9 * target + 0.1 * q_sa.detach()  # smoothing (optionnel)
 
 		# --- Loss
 		loss = F.smooth_l1_loss(q_sa, target)
@@ -5597,7 +5600,7 @@ def Train_DQN():
 	agent = DQNAgent(state_channels=11, num_actions=5)
 
 	episodes = 0
-	MAX_EPISODE_T = time.perf_counter() + 10 * 60
+	MAX_EPISODE_T = time.perf_counter() + 40 * 60
 	time_tot = 0
 	all_loss = []
 	while time.perf_counter() < MAX_EPISODE_T:
@@ -5623,10 +5626,17 @@ def Train_DQN():
 			won = game.PlayX10TerrNN_vs_Random(ind, agent)
 
 			reward = 0
-			#reward = compute_reward_from_players_blue(won)
-			reward = compute_reward_from_players(game, game.blue, game.red, game.reward2)
+			reward = game.reward2 #compute_reward_from_players_blue(won)
+			#reward = compute_reward_from_players(game, game.blue, game.red, game.reward2)
 
 			action = game.actionag
+			rew = []
+			for a in action:
+				if a == 4:
+					r = reward - 100
+				else:
+					r = reward
+				rew.append(r)
 
 			dones = 1.0 if won != -2 or count == 100 else 0.0
 
@@ -5641,27 +5651,29 @@ def Train_DQN():
 			r = 0
 			
 			for idx, pl in enumerate(game.blue):
-				if won == -1:rew = 1
-				elif pl.wetness >= 100:rew = -1
-				elif won == 1:rew = -1
-				else:rew=  reward[idx].item()
-				agent.replay.push(statess[idx], action[idx], rew, next_statess[idx], float(dones))
-				r+=rew
+				#if won == -1:rew = 1
+				if pl.wetness >= 100:rew[idx] = -1
+				#elif won == 1:rew = -1
+				#else:rew=  reward[idx].item()
+				agent.replay.push(statess[idx], action[idx], rew[idx], next_statess[idx], float(dones))
+				r+=rew[idx]
 			if len(game.blue) > 0:r /= len(game.blue)
 			game.remove_wet_players()
 
 			episode_reward += r
-
-			l = agent.optimize()
-			if l is not None:
-				loss += l
+					
 
 			count += 1
 			if won != -2 or count == 100:
 				break
 
-		all_loss.append(loss/count)
-		print(f"Episode {episodes+1}, Reward: {(episode_reward/count):.2f} / {count}")
+		for i in range(30):
+			l = agent.optimize()
+			if l is not None:
+				loss += l
+
+		all_loss.append(loss/30)
+		print(f"Episode {episodes+1}, Reward: {(episode_reward/count):.2f} / {count}, eps={agent.eps}")
 		# Fin du chronomtrage
 		end_time = time.perf_counter()
 
@@ -5818,7 +5830,7 @@ else:
 
 			pygame.display.flip()
 			clock.tick(60)
-			time.sleep(0.1)
+			#time.sleep(0.1)
 
 		# Annoncer le gagnant
 		if won == 1:
@@ -5829,7 +5841,7 @@ else:
 			print(f" Unexpected winner: {won}")
 
 		# Petite pause avant la prochaine partie
-		time.sleep(2)
+		#time.sleep(2)
 
 pygame.quit()
 
